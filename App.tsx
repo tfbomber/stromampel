@@ -8,6 +8,7 @@ import {
   RefreshControl, ActivityIndicator, TouchableOpacity,
 } from "react-native";
 import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
 
 import HeroCard        from "./components/HeroCard";
@@ -252,6 +253,8 @@ function AppInner() {
     <I18nContext.Provider value={i18n}>
     <ThemeContext.Provider value={T}>
       <SafeAreaView style={[styles.root, { backgroundColor: T.bg }]}>
+        {/* StatusBar style: dark icons on light bg, light icons on dark bg */}
+        <StatusBar style={settings?.theme === "dark" ? "light" : "dark"} />
         <ScrollView
           contentContainerStyle={styles.scroll}
           onScrollBeginDrag={() => setActiveBarSel(null)}
@@ -485,9 +488,9 @@ const styles = StyleSheet.create({
   notifyBtnText:   { fontWeight: "500", fontSize: 12 },
   // Footer
   footerSection:   { marginTop: 16, alignItems: "center", gap: 5 },
-  footerAttrib:    { fontSize: 9, textAlign: "center", lineHeight: 13, opacity: 0.4 },
+  footerAttrib:    { fontSize: 9, textAlign: "center", lineHeight: 13 },
   footerDivider:   { height: StyleSheet.hairlineWidth, width: "20%", opacity: 0.2 },
-  feedbackLink:    { fontSize: 10, textDecorationLine: "underline", opacity: 0.45 },
+  feedbackLink:    { fontSize: 10, textDecorationLine: "underline", opacity: 0.6 },
   tomorrowPlaceholder:    { flexDirection: "row", alignItems: "center", gap: 14 },
   tomorrowPlaceholderIcon:{ fontSize: 28 },
   tomorrowPlaceholderText:{ fontSize: 11, marginTop: 4, lineHeight: 16, opacity: 0.7 },

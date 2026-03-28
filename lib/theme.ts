@@ -23,7 +23,7 @@ export const LIGHT: ThemeTokens = {
   card:        "#ffffff",
   text:        "#111827",
   sub:         "#6b7280",
-  footer:      "#d1d5db",
+  footer:      "#6b7280",   // was #d1d5db — too light on white bg
   indicator:   "#111827",
   border:      "#e5e7eb",
   bubble:      "#111827",
