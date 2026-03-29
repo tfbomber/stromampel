@@ -32,6 +32,9 @@ const DEVICES = [
 
 const VAT = 1.19;
 
+/** Minimum saving in EUR to enable Starten — below this it's not worth recording */
+const MIN_SAVING_EUR = 0.10;
+
 /** Coin trajectories for money rain (px offset from screen centre) */
 const COINS = [
   { emoji: "💶", dx:  -90, dy: -230, rotDeg: -30, delay:  0 },
@@ -324,24 +327,27 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
           {DEVICES.map((d) => {
             const running_   = isRunning(d.name, d.durationMs);
 
-            // Savings to RECORD (always vs peak — what you actually save by starting now vs worst)
-            const claimSaving = (peakDiff * d.kWh) / 100;
-            // Savings to DISPLAY:
+            // Savings to DISPLAY & RECORD (same value — consistent):
             //   GREEN  → vs today's peak ("you save X€ vs most expensive")
             //   YELLOW → vs cheapest slot ("you could save X€ by waiting")
-            //   RED    → vs cheapest slot ("you'd save X€ by waiting")
             const displaySavingEur = isGreen
               ? (peakDiff     * d.kWh) / 100
               : (waitSaveDiff * d.kWh) / 100;
-            const savingText = isGreen
-              ? eurLabel(peakDiff, d.kWh)
-              : displaySavingEur > 0.01
-                ? `${eurLabel(waitSaveDiff, d.kWh)} ${lang === "en" ? "saving" : "Ersparnis"}`
-                : "–";
+
+            // Only worth showing / enabling Starten if saving crosses the threshold
+            const savingWorthy = displaySavingEur >= MIN_SAVING_EUR;
+
+            const savingText = savingWorthy
+              ? (isGreen
+                  ? eurLabel(peakDiff, d.kWh)
+                  : `${eurLabel(waitSaveDiff, d.kWh)} ${lang === "en" ? "saving" : "Ersparnis"}`)
+              : "–";
 
             // Button label & state
-            const btnLabel = running_   ? (lang === "en" ? "✓ Running" : "✓ Läuft")
-                           : canStart   ? (lang === "en" ? "Start" : "Starten")
+            // Starten disabled if saving too small (not worth it) OR price is RED
+            const canStartDevice = canStart && savingWorthy;
+            const btnLabel = running_        ? (lang === "en" ? "✓ Running" : "✓ Läuft")
+                           : canStartDevice  ? (lang === "en" ? "Start" : "Starten")
                            : (lang === "en" ? "Wait" : "Warten");
 
             return (
@@ -367,22 +373,22 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
                   <Pressable
                     style={[
                       styles.startenBtn,
-                      running_           && styles.startenBtnDone,
-                      isYellow && !running_ && styles.startenBtnYellow,
-                      isRed    && !running_ && styles.startenBtnDisabled,
+                      running_                  && styles.startenBtnDone,
+                      isYellow && !running_ && canStartDevice && styles.startenBtnYellow,
+                      (!canStartDevice && !running_) && styles.startenBtnDisabled,
                     ]}
                     onPress={() =>
-                      running_  ? handleCancel(d.name)
-                      : canStart ? handleStarten(d, claimSaving)
+                      running_         ? handleCancel(d.name)
+                      : canStartDevice ? handleStarten(d, displaySavingEur)
                       : undefined
                     }
-                    disabled={!canStart && !running_}
+                    disabled={!canStartDevice && !running_}
                   >
                     <Text style={[
                       styles.startenText,
-                      running_              && styles.startenTextDone,
-                      isYellow && !running_ && styles.startenTextYellow,
-                      isRed    && !running_ && styles.startenTextDisabled,
+                      running_                          && styles.startenTextDone,
+                      isYellow && !running_ && canStartDevice && styles.startenTextYellow,
+                      (!canStartDevice && !running_)    && styles.startenTextDisabled,
                     ]}>
                       {btnLabel}
                     </Text>
