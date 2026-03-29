@@ -25,6 +25,7 @@ import { fetchAppData }                          from "./lib/fetcher";
 import { loadSettings, saveSettings }            from "./lib/settings";
 import { adjustPriceCt, adjustDayData }          from "./lib/pricing";
 import { addClaim, removeLastClaim }             from "./lib/savings";
+import { scheduleAllUpcomingNotifications }       from "./lib/notifications";
 import type { AppData }                          from "./lib/types";
 import type { AppSettings, Device, Timing }      from "./lib/settings";
 import { ThemeContext, LIGHT, DARK }             from "./lib/theme";
@@ -116,6 +117,19 @@ function AppInner() {
     try {
       const d = await fetchAppData();
       setData(d);
+
+      // Auto-schedule notifications for ALL upcoming cheap windows.
+      // Fires even when app is closed. Re-schedules on every load
+      // to stay current. Uses latest settings from AsyncStorage.
+      const s = await import("./lib/settings").then((m) => m.loadSettings());
+      if (s.notifyActive) {
+        scheduleAllUpcomingNotifications(
+          d,
+          s.device,
+          s.timing,
+          s.language ?? "de"
+        ).catch(() => {});
+      }
     } catch (e: any) {
       setError(t("errorLoad"));
     } finally {
