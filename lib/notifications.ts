@@ -1,17 +1,22 @@
 // ============================================================
-// lib/notifications.ts — Auto-schedule notifications for
-// ALL upcoming cheap windows (works when app is closed).
+// lib/notifications.ts — Schedule notifications aligned with HeroCard
 //
-// DESIGN: On each app load, cancel stale notifications and
-// re-schedule up to 10 upcoming cheap-hour notifications for
-// today + tomorrow. Expo local notifications fire at the
-// scheduled date even when the app is fully closed.
+// STRATEGY (max 3/day, all meaningful):
+//   1. Today's nextCheapWindow  → what HeroCard is currently pointing at
+//   2. Today's cheapestWindow   → absolute cheapest today (if different from #1)
+//   3. Tomorrow's cheapestWindow → best window of tomorrow
+//
+// Deduplication: if cheapest == next (same startHour), only send ONE
+// notification tagged as "cheapest today".
+//
+// All notifications respect the user's timing offset and quiet hours (07–22).
 // ============================================================
 
 import * as Notifications from "expo-notifications";
-import type { AppData, HourSlot }   from "./types";
+import type { AppData, CheapWindow } from "./types";
 import type { Device, Timing }       from "./settings";
 
+// ── Labels ───────────────────────────────────────────────────
 const DEVICE_LABELS_DE: Record<Device, string> = {
   allgemein:     "Waschen oder Spülen",
   waschen:       "Waschmaschine",
@@ -31,88 +36,161 @@ const DEVICE_EMOJI: Record<Device, string> = {
   trockner:      "🌀",
 };
 
-/** Find contiguous GREEN-hour windows from a list of HourSlots */
-function extractCheapWindows(
-  slots: HourSlot[],
-  date: "today" | "tomorrow"
-): { startHour: number; date: "today" | "tomorrow" }[] {
-  const windows: { startHour: number; date: "today" | "tomorrow" }[] = [];
-  let inWindow = false;
+type WindowType = "next" | "cheapest_today" | "cheapest_tomorrow";
 
-  for (const slot of slots) {
-    if (slot.status === "GREEN" && !slot.isPast) {
-      if (!inWindow) {
-        windows.push({ startHour: slot.hour, date });
-        inWindow = true;
-      }
-    } else {
-      inWindow = false;
+interface PendingNotif {
+  window:   CheapWindow;
+  type:     WindowType;
+  fireAt:   Date;
+}
+
+/** Compute fire date for a window (start − timing minutes), respecting tomorrow offset */
+function computeFireAt(
+  window: CheapWindow,
+  timingMinutes: number
+): Date {
+  const d = new Date();
+  if (window.date === "tomorrow") d.setDate(d.getDate() + 1);
+  d.setHours(window.startHour, 0, 0, 0);
+  return new Date(d.getTime() - timingMinutes * 60_000);
+}
+
+/** Build notification title + body for a window */
+function buildContent(
+  type:      WindowType,
+  window:    CheapWindow,
+  device:    Device,
+  lang:      "de" | "en"
+): { title: string; body: string } {
+  const devLabel = lang === "en" ? DEVICE_LABELS_EN[device] : DEVICE_LABELS_DE[device];
+  const emoji    = DEVICE_EMOJI[device];
+  const priceStr = `${window.avgCt.toFixed(1).replace(".", ",")} ct/kWh`;
+  const timeStr  = `${window.startHour}:00–${window.endHour}:00`;
+
+  if (lang === "en") {
+    switch (type) {
+      case "next":
+        return {
+          title: `${emoji} Cheap power window starting soon`,
+          body:  `${devLabel}: ${timeStr} · ${priceStr}`,
+        };
+      case "cheapest_today":
+        return {
+          title: `⭐ Cheapest electricity today`,
+          body:  `Best window: ${timeStr} · ${priceStr} — prepare ${devLabel}`,
+        };
+      case "cheapest_tomorrow":
+        return {
+          title: `📅 Tomorrow's cheapest window`,
+          body:  `${timeStr} · ${priceStr} — plan ahead for ${devLabel}`,
+        };
     }
   }
-  return windows;
+
+  switch (type) {
+    case "next":
+      return {
+        title: `${emoji} Günstige Phase startet gleich`,
+        body:  `${devLabel}: ${timeStr} · ${priceStr}`,
+      };
+    case "cheapest_today":
+      return {
+        title: `⭐ Günstigste Phase heute`,
+        body:  `Bestes Fenster: ${timeStr} · ${priceStr} — ${devLabel} vorbereiten`,
+      };
+    case "cheapest_tomorrow":
+      return {
+        title: `📅 Günstigste Phase morgen`,
+        body:  `${timeStr} · ${priceStr} — ${devLabel} einplanen`,
+      };
+  }
 }
 
 /**
- * Cancel all StromAmpel-scheduled notifications and re-schedule
- * notifications for all upcoming cheap windows.
- * Call this every time fresh data loads successfully.
+ * Cancel all existing StromAmpel notifications and re-schedule
+ * up to 3 meaningful notifications aligned with HeroCard windows.
+ * Call this on every successful data load.
  */
 export async function scheduleAllUpcomingNotifications(
-  data: AppData,
+  data:   AppData,
   device: Device,
   timing: Timing,
-  lang: "de" | "en"
+  lang:   "de" | "en"
 ): Promise<void> {
-  // 1. Check permission — silently abort if not granted
+  // 1. Permission check — abort silently if not granted
   const { status } = await Notifications.getPermissionsAsync();
   if (status !== "granted") return;
 
-  // 2. Cancel ALL previously scheduled notifications (avoids duplicates)
+  // 2. Cancel previously scheduled notifications
   await Notifications.cancelAllScheduledNotificationsAsync();
 
-  // 3. Collect cheap windows from today + tomorrow
-  const todayWindows    = extractCheapWindows(data.today.slots, "today");
-  const tomorrowWindows = data.tomorrow
-    ? extractCheapWindows(data.tomorrow.slots, "tomorrow")
-    : [];
+  const now     = new Date();
+  const nowHour = now.getHours();
+  const pending: PendingNotif[] = [];
 
-  const allWindows = [...todayWindows, ...tomorrowWindows];
-  if (allWindows.length === 0) return;
+  // ── Collect candidate windows ─────────────────────────────
+  const todayNext      = data.today.nextCheapWindow  ?? null;
+  const todayCheapest  = data.today.cheapestWindow   ?? null;
+  const tomorrowBest   = data.tomorrow?.cheapestWindow ?? null;
 
-  const devLabel = lang === "en" ? DEVICE_LABELS_EN[device] : DEVICE_LABELS_DE[device];
-  const emoji    = DEVICE_EMOJI[device];
-  const now      = new Date();
-  let scheduled  = 0;
-  const MAX      = 8; // max notifications per refresh cycle
+  // 3a. Today's nextCheapWindow (HeroCard-aligned)
+  if (todayNext && todayNext.startHour > nowHour) {
+    pending.push({
+      window: todayNext,
+      type:   "next",
+      fireAt: computeFireAt(todayNext, timing),
+    });
+  }
 
-  for (const w of allWindows) {
-    if (scheduled >= MAX) break;
+  // 3b. Today's cheapestWindow — only if DIFFERENT start hour from next
+  //     and not already past
+  if (
+    todayCheapest &&
+    todayCheapest.startHour > nowHour &&
+    todayCheapest.startHour !== todayNext?.startHour
+  ) {
+    pending.push({
+      window: todayCheapest,
+      type:   "cheapest_today",
+      fireAt: computeFireAt(todayCheapest, timing),
+    });
+  } else if (
+    // Both point to same hour → upgrade the "next" label to "cheapest"
+    todayNext &&
+    todayCheapest &&
+    todayCheapest.startHour === todayNext.startHour &&
+    todayNext.startHour > nowHour
+  ) {
+    // Replace "next" type with "cheapest_today" for clearer messaging
+    const idx = pending.findIndex((p) => p.type === "next");
+    if (idx !== -1) pending[idx].type = "cheapest_today";
+  }
 
-    // Compute the exact fire time = window start − timing minutes
-    const target = new Date();
-    if (w.date === "tomorrow") target.setDate(target.getDate() + 1);
-    target.setHours(w.startHour, 0, 0, 0);
-    const fireAt = new Date(target.getTime() - timing * 60_000);
+  // 3c. Tomorrow's cheapestWindow (always future)
+  if (tomorrowBest) {
+    pending.push({
+      window: tomorrowBest,
+      type:   "cheapest_tomorrow",
+      fireAt: computeFireAt(tomorrowBest, timing),
+    });
+  }
 
-    // Skip if fire time has already passed
-    if (fireAt <= now) continue;
+  // ── Schedule each notification ────────────────────────────
+  let scheduled = 0;
+  for (const p of pending) {
+    // Skip if fire time already passed
+    if (p.fireAt <= now) continue;
 
-    // Optional: only fire during decent hours (7:00 – 21:00)
-    const fireH = fireAt.getHours();
-    if (fireH < 7 || fireH >= 21) continue;
+    // Quiet hours: only send between 07:00 and 22:00
+    const fireHour = p.fireAt.getHours();
+    if (fireHour < 7 || fireHour >= 22) continue;
+
+    const { title, body } = buildContent(p.type, p.window, device, lang);
 
     try {
       await Notifications.scheduleNotificationAsync({
-        content: {
-          title: lang === "en"
-            ? `${emoji} StromAmpel · Cheap power starting soon`
-            : `${emoji} StromAmpel · Günstige Phase startet gleich`,
-          body: lang === "en"
-            ? `Prepare ${devLabel} — starts at ${w.startHour}:00`
-            : `${devLabel} jetzt vorbereiten — ab ${w.startHour} Uhr`,
-          sound: true,
-        },
-        trigger: { type: "date", date: fireAt } as any,
+        content: { title, body, sound: true },
+        trigger: { type: "date", date: p.fireAt } as any,
       });
       scheduled++;
     } catch {
@@ -120,8 +198,8 @@ export async function scheduleAllUpcomingNotifications(
     }
   }
 
-  // Log for debugging (visible in Metro logs)
   console.log(
-    `[Notifications] Scheduled ${scheduled} notification(s) for upcoming cheap windows.`
+    `[Notifications] Scheduled ${scheduled}/${pending.length} notification(s)` +
+    ` (next=${todayNext?.startHour ?? "–"}, cheapest=${todayCheapest?.startHour ?? "–"}, tomorrow=${tomorrowBest?.startHour ?? "–"})`
   );
 }
