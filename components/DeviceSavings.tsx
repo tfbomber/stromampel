@@ -207,19 +207,40 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
     ? `${cheapSlot.hour}:00 ${lang === "en" ? "h" : "Uhr"}`
     : (lang === "en" ? "cheapest hour" : "günstigste Stunde");
 
-  const priceDiffLow  = currentPriceCt - minPriceCt; // current vs cheapest future slot
-  const peakDiff      = Math.max(0, maxPriceCt - currentPriceCt); // current vs today's peak
-  const waitSaveDiff  = Math.max(0, priceDiffLow);                // how much cheaper if waited
+  // ── Duration-aware sliding window helpers ─────────────────────
+  /**
+   * Average price of the next `n` future hours ("cost if I start now").
+   * Pads with currentPriceCt if fewer than n slots remain.
+   */
+  function avgNextNCt(n: number): number {
+    const prices = futureSlots.slice(0, n).map((s) => s.priceCt!);
+    while (prices.length < n) prices.push(currentPriceCt!);
+    return prices.reduce((a, b) => a + b, 0) / n;
+  }
+
+  /**
+   * Best (cheapest or priciest) contiguous N-hour window avg
+   * across all remaining future slots.
+   */
+  function slidingWindowAvgCt(n: number, mode: "cheapest" | "priciest"): number {
+    if (futureSlots.length === 0) return currentPriceCt!;
+    const effectiveN = Math.min(n, futureSlots.length);
+    let best = mode === "cheapest" ? Infinity : -Infinity;
+    for (let i = 0; i <= futureSlots.length - effectiveN; i++) {
+      const avg =
+        futureSlots.slice(i, i + effectiveN).reduce((s, sl) => s + sl.priceCt!, 0) / effectiveN;
+      if (mode === "cheapest" && avg < best) best = avg;
+      if (mode === "priciest" && avg > best) best = avg;
+    }
+    return best === Infinity || best === -Infinity ? currentPriceCt! : best;
+  }
 
   // ── Status-based mode ────────────────────────────────────────
-  // GREEN  → start now, saves vs peak
-  // YELLOW → can start, but note cheaper option later
-  // RED    → wait, button disabled
   const isGreen  = currentStatus === "GREEN";
   const isYellow = currentStatus === "YELLOW";
   const isRed    = currentStatus === "RED" || (!isGreen && !isYellow);
-  const canStart = isGreen || isYellow;   // both allow Starten
-  const hasSpread = peakDiff >= 1;        // meaningful price spread exists
+  const canStart = isGreen || isYellow;
+  const hasSpread = Math.max(0, maxPriceCt - currentPriceCt) >= 1;
 
   return (
     <>
@@ -325,26 +346,36 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
 
         <View style={styles.rows}>
           {DEVICES.map((d) => {
-            const running_   = isRunning(d.name, d.durationMs);
+            const running_     = isRunning(d.name, d.durationMs);
+            // Device run duration in whole hours (ceiling)
+            const durationH    = Math.ceil(d.durationMs / 3_600_000);
 
-            // Savings to DISPLAY & RECORD (same value — consistent):
-            //   GREEN  → vs today's peak ("you save X€ vs most expensive")
-            //   YELLOW → vs cheapest slot ("you could save X€ by waiting")
+            // Duration-aware savings:
+            //   avgNowCt   = avg price for the next durationH hours (cost if started NOW)
+            //   avgPeakCt  = avg of the worst durationH-hour window today (GREEN baseline)
+            //   avgCheapCt = avg of the cheapest durationH-hour window today (YELLOW/RED baseline)
+            const avgNowCt   = avgNextNCt(durationH);
+            const avgPeakCt  = slidingWindowAvgCt(durationH, "priciest");
+            const avgCheapCt = slidingWindowAvgCt(durationH, "cheapest");
+
+            const peakDiffCt  = Math.max(0, avgPeakCt  - avgNowCt);   // GREEN: save vs worst
+            const cheapDiffCt = Math.max(0, avgNowCt   - avgCheapCt); // YELLOW/RED: save by waiting
+
+            // Savings to DISPLAY & RECORD (consistent, duration-accurate)
             const displaySavingEur = isGreen
-              ? (peakDiff     * d.kWh) / 100
-              : (waitSaveDiff * d.kWh) / 100;
+              ? (peakDiffCt  * d.kWh) / 100
+              : (cheapDiffCt * d.kWh) / 100;
 
-            // Only worth showing / enabling Starten if saving crosses the threshold
+            // Only worth enabling Starten if saving crosses the threshold
             const savingWorthy = displaySavingEur >= MIN_SAVING_EUR;
 
             const savingText = savingWorthy
               ? (isGreen
-                  ? eurLabel(peakDiff, d.kWh)
-                  : `${eurLabel(waitSaveDiff, d.kWh)} ${lang === "en" ? "saving" : "Ersparnis"}`)
+                  ? eurLabel(peakDiffCt,  d.kWh)
+                  : `${eurLabel(cheapDiffCt, d.kWh)} ${lang === "en" ? "saving" : "Ersparnis"}`)
               : "–";
 
             // Button label & state
-            // Starten disabled if saving too small (not worth it) OR price is RED
             const canStartDevice = canStart && savingWorthy;
             const btnLabel = running_        ? (lang === "en" ? "✓ Running" : "✓ Läuft")
                            : canStartDevice  ? (lang === "en" ? "Start" : "Starten")
