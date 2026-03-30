@@ -7,16 +7,20 @@
 import React, { useState, useEffect, useRef } from "react";
 import { View, Text, StyleSheet, Pressable, Animated, Modal } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { HourSlot } from "../lib/types";
+import type { HourSlot, CheapWindow } from "../lib/types";
 import type { TariffType } from "../lib/settings";
 import { useTheme } from "../lib/theme";
 import { useI18n } from "../lib/i18n";
 
 interface Props {
-  todaySlots:     HourSlot[];
-  currentPriceCt: number | null;
-  tariffType:     TariffType;
-  currentStatus?: string;            // "GREEN" | "YELLOW" | "RED" | "UNKNOWN"
+  todaySlots:          HourSlot[];
+  currentPriceCt:      number | null;
+  tariffType:          TariffType;
+  currentStatus?:      string;            // "GREEN" | "YELLOW" | "RED" | "UNKNOWN"
+  /** From data.today.nextCheapWindow — used for the Tip */
+  todayNextWindow?:    CheapWindow | null;
+  /** From data.tomorrow.cheapestWindow — used for the Tip fallback */
+  tomorrowBestWindow?: CheapWindow | null;
   onClaim?:  (device: string, kWh: number, savingEur: number) => void;
   onCancel?: (device: string) => void;
 }
@@ -58,7 +62,7 @@ function padTime(d: Date) {
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
 }
 
-export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, currentStatus, onClaim, onCancel }: Props) {
+export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, currentStatus, todayNextWindow, tomorrowBestWindow, onClaim, onCancel }: Props) {
   const T = useTheme();
   const { lang } = useI18n();
 
@@ -235,6 +239,9 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
     return best === Infinity || best === -Infinity ? currentPriceCt! : best;
   }
 
+  // nowHour for Tip comparison
+  const nowHour = new Date().getHours();
+
   // ── Status-based mode ────────────────────────────────────────
   const isGreen  = currentStatus === "GREEN";
   const isYellow = currentStatus === "YELLOW";
@@ -376,7 +383,12 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
               : "–";
 
             // Button label & state
-            const canStartDevice = canStart && savingWorthy;
+            // GREEN: need 2×N future slots for fair peak comparison
+            // YELLOW: need at least N future slots to run the device
+            const hasEnoughSlots = isGreen
+              ? futureSlots.length >= 2 * durationH
+              : futureSlots.length >= durationH;
+            const canStartDevice = canStart && savingWorthy && hasEnoughSlots;
             const btnLabel = running_        ? (lang === "en" ? "✓ Running" : "✓ Läuft")
                            : canStartDevice  ? (lang === "en" ? "Start" : "Starten")
                            : (lang === "en" ? "Wait" : "Warten");
@@ -430,14 +442,21 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
           })}
         </View>
 
-        {/* Mode footnote */}
-        <Text style={[styles.footnote, { color: T.footer }]}>
-          {isGreen
-            ? (lang === "en" ? "vs. most expensive slot today · incl. VAT" : "vs. teuerstem Restfenster heute · inkl. MwSt.")
-            : isYellow
-              ? (lang === "en" ? `Saving if from ${cheapLabel} · incl. VAT` : `Ersparnis wenn ab ${cheapLabel} · inkl. MwSt.`)
-              : (lang === "en" ? `Cheaper from ${cheapLabel} · incl. VAT` : `Günstiger ab ${cheapLabel} · inkl. MwSt.`)}
-        </Text>
+        {/* ── Tip: best cheap window (aligned with HeroCard) ── */}
+        {(() => {
+          const showToday = todayNextWindow && todayNextWindow.startHour > nowHour;
+          const w = showToday ? todayNextWindow! : tomorrowBestWindow ?? null;
+          if (!w) return null;
+          const when = showToday
+            ? (lang === "en" ? `from ${w.startHour}:00 today` : `ab ${w.startHour}:00 Uhr heute`)
+            : (lang === "en" ? `from ${w.startHour}:00 tomorrow` : `ab morgen ${w.startHour}:00 Uhr`);
+          const price = `${w.avgCt.toFixed(1).replace(".", ",")} ct/kWh`;
+          return (
+            <Text style={[styles.tip, { color: T.sub }]}>
+              {lang === "en" ? `💡 Cheapest: ${when} · ${price}` : `💡 Günstigste Phase: ${when} · ${price}`}
+            </Text>
+          );
+        })()}
       </View>
     </>
   );
@@ -521,4 +540,5 @@ const styles = StyleSheet.create({
   startenTextYellow:   { color: "#b45309" },
   startenTextDisabled: { color: "#9ca3af" },
   footnote:   { fontSize: 10, marginTop: 10, textAlign: "right" },
+  tip:        { fontSize: 11, marginTop: 8, textAlign: "center", opacity: 0.75 },
 });

@@ -162,9 +162,15 @@ function AppInner() {
     } catch { /* ignore */ }
   }
 
-  // ── Notify activation ─────────────────────────────────────
+  // ── Notify activation ─────────────────────────────────────────
   async function handleNotifyActivate(device: Device, timing: Timing) {
     await handleSettingsChange({ notifyActive: true, device, timing });
+    // Immediately schedule — don't wait for next 15-min auto-refresh
+    if (data) {
+      scheduleAllUpcomingNotifications(
+        data, device, timing, settings?.language ?? "de"
+      ).catch(() => {});
+    }
   }
 
   // ── Claim savings ─────────────────────────────────────────
@@ -320,12 +326,14 @@ function AppInner() {
           {/* ── Weekly savings (outcome first) ────────── */}
           <SavingsSummary refreshKey={claimsRefreshKey} />
 
-          {/* ── Device savings (action area) ──────────── */}
+          {/* ── Device savings (action area) ───────────────────── */}
           <DeviceSavings
             todaySlots={today?.slots ?? []}
             currentPriceCt={current?.priceCt ?? null}
             tariffType={settings?.tariffType ?? "dynamic"}
             currentStatus={current?.status ?? "UNKNOWN"}
+            todayNextWindow={today?.nextCheapWindow ?? null}
+            tomorrowBestWindow={tomorrow?.cheapestWindow ?? null}
             onClaim={handleClaim}
             onCancel={handleCancelClaim}
           />

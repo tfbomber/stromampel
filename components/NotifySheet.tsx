@@ -64,35 +64,8 @@ export default function NotifySheet({ visible, onClose, onActivate, cheapWindow 
       );
       return;
     }
-
-    if (cheapWindow) {
-      const target = new Date();
-      if (cheapWindow.date === "tomorrow") target.setDate(target.getDate() + 1);
-      target.setHours(cheapWindow.startHour, 0, 0, 0);
-      const fireAt = new Date(target.getTime() - timing * 60_000);
-      const now    = new Date();
-
-      if (fireAt > now) {
-        const fireH = fireAt.getHours();
-        if (fireH < 21 && fireH >= 7) {
-          const devLabel = lang === "en"
-            ? (device === "allgemein" ? "Appliances" : DEVICE_LABELS_EN[device])
-            : (device === "allgemein" ? "Waschen oder Spülen" : DEVICE_LABELS_DE[device]);
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: lang === "en"
-                ? "StromAmpel · Cheap phase starting soon"
-                : "StromAmpel · Günstige Phase startet gleich",
-              body: lang === "en"
-                ? `Prepare ${devLabel} – starts at ${cheapWindow.startHour}:00`
-                : `${devLabel} jetzt vorbereiten – ab ${cheapWindow.startHour} Uhr`,
-            },
-            trigger: { type: "date", date: fireAt } as any,
-          });
-        }
-      }
-    }
-
+    // Scheduling is handled by the auto-scheduler in App.tsx
+    // which fires immediately after onActivate is called.
     onActivate(device, timing);
     onClose();
   }
