@@ -202,24 +202,4 @@ export async function scheduleAllUpcomingNotifications(
     `[Notifications] Scheduled ${scheduled}/${pending.length} notification(s)` +
     ` (next=${todayNext?.startHour ?? "–"}, cheapest=${todayCheapest?.startHour ?? "–"}, tomorrow=${tomorrowBest?.startHour ?? "–"})`
   );
-
-  // ── DEBUG: fire a test notification in 60 seconds ──────────
-  // TODO: remove before production release
-  const DEBUG_TEST_NOTIFY = true;
-  if (DEBUG_TEST_NOTIFY) {
-    const testFireAt = new Date(Date.now() + 60_000);
-    try {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: "🧪 StromAmpel · Test",
-          body:  `Notifikation funktioniert! Scheduled: ${scheduled} echte(r) Alarm(e)`,
-          sound: true,
-        },
-        trigger: { type: "date", date: testFireAt } as any,
-      });
-      console.log("[Notifications] DEBUG test notification scheduled for +60s");
-    } catch (e) {
-      console.warn("[Notifications] DEBUG test scheduling failed:", e);
-    }
-  }
 }
