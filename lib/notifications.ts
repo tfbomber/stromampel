@@ -107,15 +107,18 @@ function buildContent(
 }
 
 /**
- * Cancel all existing StromAmpel notifications and re-schedule
- * up to 3 meaningful notifications aligned with HeroCard windows.
- * Call this on every successful data load.
+ * Cancel all existing StromAmpel notifications and re-schedule.
+ *
+ * If `userPickedFireAt` (epoch ms) is provided and still in the future,
+ * that specific time is scheduled as the primary notification.
+ * Otherwise auto-selects HeroCard windows (max 3/day).
  */
 export async function scheduleAllUpcomingNotifications(
-  data:   AppData,
-  device: Device,
-  timing: Timing,
-  lang:   "de" | "en"
+  data:             AppData,
+  device:           Device,
+  timing:           Timing,
+  lang:             "de" | "en",
+  userPickedFireAt?: number,   // epoch ms from user's explicit pick
 ): Promise<void> {
   // 1. Permission check — abort silently if not granted
   const { status } = await Notifications.getPermissionsAsync();
@@ -128,65 +131,90 @@ export async function scheduleAllUpcomingNotifications(
   const nowHour = now.getHours();
   const pending: PendingNotif[] = [];
 
-  // ── Collect candidate windows ─────────────────────────────
-  const todayNext      = data.today.nextCheapWindow  ?? null;
-  const todayCheapest  = data.today.cheapestWindow   ?? null;
-  const tomorrowBest   = data.tomorrow?.cheapestWindow ?? null;
+  // ── Mode A: User picked a specific time ───────────────────
+  if (userPickedFireAt && userPickedFireAt > now.getTime()) {
+    const fireAt     = new Date(userPickedFireAt);
+    const targetHour = fireAt.getHours() + Math.round(timing / 60); // approx window hour
+    const isToday    = fireAt.toDateString() === now.toDateString();
+    const targetDate: "today" | "tomorrow" = isToday ? "today" : "tomorrow";
 
-  // 3a. Today's nextCheapWindow (HeroCard-aligned)
-  if (todayNext && todayNext.startHour > nowHour) {
-    pending.push({
-      window: todayNext,
-      type:   "next",
-      fireAt: computeFireAt(todayNext, timing),
-    });
-  }
+    // Find the slot that corresponds to the window start hour
+    const dayData  = isToday ? data.today : data.tomorrow;
+    const winHour  = Math.min(23, targetHour < 24 ? targetHour : 23) ;
+    const slot     = dayData?.slots.find(s => s.hour === winHour);
+    const avgCt    = slot?.priceCt ?? 0;
 
-  // 3b. Today's cheapestWindow — only if DIFFERENT start hour from next
-  //     and not already past
-  if (
-    todayCheapest &&
-    todayCheapest.startHour > nowHour &&
-    todayCheapest.startHour !== todayNext?.startHour
-  ) {
-    pending.push({
-      window: todayCheapest,
-      type:   "cheapest_today",
-      fireAt: computeFireAt(todayCheapest, timing),
-    });
-  } else if (
-    // Both point to same hour → upgrade the "next" label to "cheapest"
-    todayNext &&
-    todayCheapest &&
-    todayCheapest.startHour === todayNext.startHour &&
-    todayNext.startHour > nowHour
-  ) {
-    // Replace "next" type with "cheapest_today" for clearer messaging
-    const idx = pending.findIndex((p) => p.type === "next");
-    if (idx !== -1) pending[idx].type = "cheapest_today";
-  }
+    const syntheticWindow: CheapWindow = {
+      startHour: winHour,
+      endHour:   Math.min(23, winHour + 1),
+      label:     `${winHour}:00–${Math.min(23, winHour + 1)}:00`,
+      avgCt,
+      date:      targetDate,
+    };
+    pending.push({ window: syntheticWindow, type: "next", fireAt });
 
-  // 3c. Tomorrow's cheapestWindow (always future)
-  if (tomorrowBest) {
-    pending.push({
-      window: tomorrowBest,
-      type:   "cheapest_tomorrow",
-      fireAt: computeFireAt(tomorrowBest, timing),
-    });
+    // Also schedule tomorrow's best window as secondary (if different day)
+    const tomorrowBest = data.tomorrow?.cheapestWindow ?? null;
+    if (tomorrowBest && !isToday) {
+      // user already picked tomorrow — skip auto-tomorrow
+    } else if (tomorrowBest) {
+      pending.push({
+        window: tomorrowBest,
+        type:   "cheapest_tomorrow",
+        fireAt: computeFireAt(tomorrowBest, timing),
+      });
+    }
+  } else {
+    // ── Mode B: Auto HeroCard windows ─────────────────────────
+    const todayNext      = data.today.nextCheapWindow  ?? null;
+    const todayCheapest  = data.today.cheapestWindow   ?? null;
+    const tomorrowBest   = data.tomorrow?.cheapestWindow ?? null;
+
+    if (todayNext && todayNext.startHour > nowHour) {
+      pending.push({
+        window: todayNext,
+        type:   "next",
+        fireAt: computeFireAt(todayNext, timing),
+      });
+    }
+
+    if (
+      todayCheapest &&
+      todayCheapest.startHour > nowHour &&
+      todayCheapest.startHour !== todayNext?.startHour
+    ) {
+      pending.push({
+        window: todayCheapest,
+        type:   "cheapest_today",
+        fireAt: computeFireAt(todayCheapest, timing),
+      });
+    } else if (
+      todayNext &&
+      todayCheapest &&
+      todayCheapest.startHour === todayNext.startHour &&
+      todayNext.startHour > nowHour
+    ) {
+      const idx = pending.findIndex((p) => p.type === "next");
+      if (idx !== -1) pending[idx].type = "cheapest_today";
+    }
+
+    if (tomorrowBest) {
+      pending.push({
+        window: tomorrowBest,
+        type:   "cheapest_tomorrow",
+        fireAt: computeFireAt(tomorrowBest, timing),
+      });
+    }
   }
 
   // ── Schedule each notification ────────────────────────────
   let scheduled = 0;
   for (const p of pending) {
-    // Skip if fire time already passed
     if (p.fireAt <= now) continue;
-
-    // Quiet hours: only send between 07:00 and 22:00
     const fireHour = p.fireAt.getHours();
     if (fireHour < 7 || fireHour >= 22) continue;
 
     const { title, body } = buildContent(p.type, p.window, device, lang);
-
     try {
       await Notifications.scheduleNotificationAsync({
         content: { title, body, sound: true },
@@ -200,6 +228,6 @@ export async function scheduleAllUpcomingNotifications(
 
   console.log(
     `[Notifications] Scheduled ${scheduled}/${pending.length} notification(s)` +
-    ` (next=${todayNext?.startHour ?? "–"}, cheapest=${todayCheapest?.startHour ?? "–"}, tomorrow=${tomorrowBest?.startHour ?? "–"})`
+    ` mode=${userPickedFireAt ? "user-pick" : "auto"}`
   );
 }

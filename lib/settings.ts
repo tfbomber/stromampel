@@ -11,13 +11,14 @@ export type Theme      = "light" | "dark";
 export type Language   = "de" | "en";
 
 export interface AppSettings {
-  tariffType:   TariffType;
-  anbieter:     string;
-  device:       Device;
-  timing:       Timing;
-  notifyActive: boolean;
-  theme:        Theme;
-  language:     Language;
+  tariffType:    TariffType;
+  anbieter:      string;
+  device:        Device;
+  timing:        Timing;
+  notifyActive:  boolean;
+  notifyFireAt?: number;   // epoch ms — exact time the notification should fire
+  theme:         Theme;
+  language:      Language;
 }
 
 const KEY     = "sa_settings_v1";

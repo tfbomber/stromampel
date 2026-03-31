@@ -127,7 +127,8 @@ function AppInner() {
           d,
           s.device,
           s.timing,
-          s.language ?? "de"
+          s.language ?? "de",
+          s.notifyFireAt,          // re-use user's explicit pick if still future
         ).catch(() => {});
       }
     } catch (e: any) {
@@ -163,12 +164,12 @@ function AppInner() {
   }
 
   // ── Notify activation ─────────────────────────────────────────
-  async function handleNotifyActivate(device: Device, timing: Timing) {
-    await handleSettingsChange({ notifyActive: true, device, timing });
+  async function handleNotifyActivate(device: Device, timing: Timing, fireAtEpoch: number) {
+    await handleSettingsChange({ notifyActive: true, device, timing, notifyFireAt: fireAtEpoch });
     // Immediately schedule — don't wait for next 15-min auto-refresh
     if (data) {
       scheduleAllUpcomingNotifications(
-        data, device, timing, settings?.language ?? "de"
+        data, device, timing, settings?.language ?? "de", fireAtEpoch
       ).catch(() => {});
     }
   }
@@ -402,8 +403,14 @@ function AppInner() {
             {settings?.notifyActive ? (
               <>
                 <Text style={[styles.notifyActive, { color: T.text, flex: 1 }]}>
-                  🔔 {settings.timing === 0 ? t("notifyOnStart") : settings.timing === 30 ? t("notifyBefore30") : t("notifyBefore60")}
-                  {" · "}{settings.device === "allgemein" ? t("allgemein") : settings.device}
+                  {(() => {
+                    const fireAt = settings.notifyFireAt ? new Date(settings.notifyFireAt) : null;
+                    const timeStr = fireAt && fireAt > new Date()
+                      ? `${fireAt.getHours().toString().padStart(2, "0")}:${fireAt.getMinutes().toString().padStart(2, "0")} Uhr`
+                      : null;
+                    const devLabel = settings.device === "allgemein" ? t("allgemein") : settings.device;
+                    return `🔔 ${timeStr ? (lang === "en" ? `Reminder at ${timeStr}` : `Erinnerung um ${timeStr}`) : (settings.timing === 0 ? t("notifyOnStart") : settings.timing === 30 ? t("notifyBefore30") : t("notifyBefore60"))} · ${devLabel}`;
+                  })()}
                 </Text>
                 <Pressable onPress={() => setNotifyOpen(true)}>
                   <Text style={[styles.notifyEdit, { color: T.sub }]}>{t("notifyChange")}</Text>
@@ -456,7 +463,10 @@ function AppInner() {
           visible={notifyOpen}
           onClose={() => setNotifyOpen(false)}
           onActivate={handleNotifyActivate}
-          cheapWindow={cheapWindow}
+          todaySlots={today?.slots ?? []}
+          todayCheapestWindow={today?.cheapestWindow ?? null}
+          tomorrowSlots={tomorrow?.slots ?? null}
+          tomorrowCheapestWindow={tomorrow?.cheapestWindow ?? null}
         />
 
         <FeedbackSheet
