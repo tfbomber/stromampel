@@ -13,6 +13,7 @@ import type { Device, Timing } from "../lib/settings";
 import type { HourSlot, CheapWindow } from "../lib/types";
 import { useTheme } from "../lib/theme";
 import { useI18n } from "../lib/i18n";
+import TimelineBar from "./TimelineBar";
 
 // ── Labels ─────────────────────────────────────────────────
 const DEVICE_LABELS_DE: Record<Device, string> = {
@@ -127,26 +128,9 @@ export default function NotifySheet({
     onClose();
   }
 
-  // Price bar helpers
-  const activeSlots = selectedDay === "today" ? todayFuture : tomorrowFull;
-  const cheapHour   = selectedDay === "today" ? todayCheapHour : tomorrowCheapHour;
-  const prices      = activeSlots.map(s => s.priceCt!);
-  const minP        = prices.length ? Math.min(...prices) : 0;
-  const maxP        = prices.length ? Math.max(...prices) : 1;
-  const BAR_MIN_H   = 20;
-  const BAR_MAX_H   = 54;
-
-  function barH(p: number | null): number {
-    if (p === null || maxP === minP) return BAR_MIN_H;
-    return BAR_MIN_H + ((p - minP) / (maxP - minP)) * (BAR_MAX_H - BAR_MIN_H);
-  }
-  function barColor(status: string, selected: boolean, cheapest: boolean): string {
-    if (selected)  return "#1d4ed8";
-    if (cheapest)  return "#16a34a";
-    if (status === "GREEN")  return "#4ade80";
-    if (status === "YELLOW") return "#fbbf24";
-    return "#f87171";
-  }
+  // Slots for TimelineBar (full day)
+  const barSlots  = selectedDay === "today" ? todaySlots : (tomorrowSlots ?? []);
+  const cheapHour = selectedDay === "today" ? todayCheapHour : tomorrowCheapHour;
 
   const DARK_BTN = "#111827";
 
@@ -237,66 +221,21 @@ export default function NotifySheet({
               </View>
 
               {/* Micro price bar */}
-              {activeSlots.length > 0 ? (
-                <>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    style={styles.barScroll}
-                    contentContainerStyle={styles.barContainer}
-                  >
-                    {activeSlots.map(slot => {
-                      const sel  = slot.hour === selectedHour;
-                      const chp  = slot.hour === cheapHour;
-                      return (
-                        <Pressable
-                          key={slot.hour}
-                          onPress={() => setSelectedHour(slot.hour)}
-                          style={styles.barCol}
-                        >
-                          <Text style={[styles.barStar, { color: "#f59e0b" }]}>
-                            {chp ? "★" : " "}
-                          </Text>
-                          <View style={styles.barWrap}>
-                            <View style={[
-                              styles.barFill,
-                              {
-                                height: barH(slot.priceCt),
-                                backgroundColor: barColor(slot.status, sel, chp),
-                                opacity: sel ? 1 : 0.6,
-                              },
-                              sel && styles.barSelected,
-                            ]} />
-                          </View>
-                          <Text style={[styles.barLabel, { color: sel ? T.text : T.sub },
-                            sel && { fontWeight: "700" }]}>
-                            {slot.hour}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-
-                  {/* Selected price info */}
-                  {(() => {
-                    const sl = activeSlots.find(s => s.hour === selectedHour);
-                    if (!sl) return null;
-                    const isCheap = sl.hour === cheapHour;
-                    return (
-                      <Text style={[styles.selectedInfo, { color: T.sub }]}>
-                        {selectedHour}:00 · {(sl.priceCt ?? 0).toFixed(1).replace(".", ",")} ct/kWh
-                        {isCheap ? (lang === "en" ? "  ★ cheapest" : "  ★ günstigste") : ""}
-                      </Text>
-                    );
-                  })()}
-                </>
-              ) : (
-                <Text style={[styles.noSlots, { color: T.sub }]}>
-                  {lang === "en"
-                    ? "No future hours available today."
-                    : "Keine zukünftigen Stunden heute verfügbar."}
-                </Text>
-              )}
+              {/* ── TimelineBar (same as main page) ── */}
+              <View style={styles.timelineWrap}>
+                {barSlots.length > 0 ? (
+                  <TimelineBar
+                    slots={barSlots}
+                    isToday={selectedDay === "today"}
+                    activeHour={selectedHour}
+                    onActiveHourChange={(h) => { if (h !== null) setSelectedHour(h); }}
+                  />
+                ) : (
+                  <Text style={[styles.noSlots, { color: T.sub }]}>
+                    {lang === "en" ? "No data available." : "Keine Daten verfügbar."}
+                  </Text>
+                )}
+              </View>
 
               {/* Timing selector */}
               <View style={styles.timingList}>
@@ -326,19 +265,28 @@ export default function NotifySheet({
                 ))}
               </View>
 
-              {/* Preview */}
+              {/* Preview — clearly shows window time vs. notification time */}
               <View style={[styles.preview,
                 { backgroundColor: fireAtValid ? "#f0fdf4" : "#fef2f2" }]}>
-                <Text style={[styles.previewText,
-                  { color: fireAtValid ? "#15803d" : "#dc2626" }]}>
-                  {fireAtValid
-                    ? (lang === "en"
-                        ? `💡 Reminder at ${fireLabel}`
-                        : `💡 Erinnerung um ${fireLabel}`)
-                    : (lang === "en"
-                        ? "⚠️ Time already passed — choose a later hour"
-                        : "⚠️ Zeit abgelaufen – andere Stunde wählen")}
-                </Text>
+                {fireAtValid ? (
+                  <>
+                    <Text style={[styles.previewRow, { color: T.sub }]}>
+                      {lang === "en" ? `📍 Window: ${selectedHour}:00 Uhr` : `📍 Fenster: ${pad2(selectedHour)}:00 Uhr`}
+                      {selectedHour === cheapHour ? (lang === "en" ? "  (cheapest)" : "  (günstigste)") : ""}
+                    </Text>
+                    <Text style={[styles.previewRow, { color: "#15803d", fontWeight: "700" }]}>
+                      {lang === "en"
+                        ? `💡 Reminder at ${fireLabel}${timing > 0 ? ` (${timing} min before)` : ""}`
+                        : `💡 Erinnerung um ${fireLabel}${timing > 0 ? ` (${timing} Min vorher)` : ""}`}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={[styles.previewText, { color: "#dc2626" }]}>
+                    {lang === "en"
+                      ? "⚠️ Time already passed — choose a later hour"
+                      : "⚠️ Zeit abgelaufen – andere Stunde wählen"}
+                  </Text>
+                )}
               </View>
             </>
           )}
@@ -372,6 +320,7 @@ const styles = StyleSheet.create({
   backdrop:    { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.4)" },
   sheet: {
     position: "absolute", bottom: 0, left: 0, right: 0,
+    maxHeight: "92%",
     borderTopLeftRadius: 20, borderTopRightRadius: 20, elevation: 20,
   },
   handleWrap:  { alignItems: "center", paddingTop: 12, paddingBottom: 4 },
@@ -399,17 +348,9 @@ const styles = StyleSheet.create({
   dayTabActive:   { backgroundColor: "#111827", borderColor: "#111827" },
   dayTabDisabled: { opacity: 0.4 },
   dayTabText:  { fontSize: 13, fontWeight: "600" },
-  // Price bar
-  barScroll:   { marginBottom: 2 },
-  barContainer:{ flexDirection: "row", alignItems: "flex-end", gap: 4, paddingVertical: 4 },
-  barCol:      { alignItems: "center", width: 30 },
-  barStar:     { fontSize: 9, marginBottom: 1 },
-  barWrap:     { height: 60, justifyContent: "flex-end" },
-  barFill:     { width: 18, borderRadius: 4 },
-  barSelected: { borderWidth: 2, borderColor: "#1d4ed8" },
-  barLabel:    { fontSize: 10, marginTop: 3 },
-  selectedInfo:{ fontSize: 11, textAlign: "center", marginBottom: 10, marginTop: 2 },
   noSlots:     { fontSize: 12, textAlign: "center", marginVertical: 10 },
+  // Timeline
+  timelineWrap:{ marginBottom: 10 },
   // Timing
   timingList:  { gap: 6, marginBottom: 10 },
   timingRow: {
@@ -422,8 +363,9 @@ const styles = StyleSheet.create({
   badgeText:   { fontSize: 10 },
   check:       { fontSize: 13 },
   // Preview
-  preview:     { borderRadius: 10, padding: 10, marginBottom: 12, alignItems: "center" },
+  preview:     { borderRadius: 10, padding: 10, marginBottom: 12, alignItems: "center", gap: 4 },
   previewText: { fontSize: 12, fontWeight: "600" },
+  previewRow:  { fontSize: 12 },
   // CTA
   cta:         { borderRadius: 12, paddingVertical: 14, alignItems: "center", marginBottom: 8 },
   ctaDisabled: { opacity: 0.4 },
