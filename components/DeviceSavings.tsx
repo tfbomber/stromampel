@@ -442,19 +442,21 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
           })}
         </View>
 
-        {/* ── Tip: best cheap window (aligned with HeroCard) ── */}
+        {/* ── Tip: aligned with HeroCard hint format ── */}
         {(() => {
           const showToday = todayNextWindow && todayNextWindow.startHour > nowHour;
           const w = showToday ? todayNextWindow! : tomorrowBestWindow ?? null;
           if (!w) return null;
-          const when = showToday
-            ? (lang === "en" ? `from ${w.startHour}:00 today` : `ab ${w.startHour}:00 Uhr heute`)
-            : (lang === "en" ? `from ${w.startHour}:00 tomorrow` : `ab morgen ${w.startHour}:00 Uhr`);
-          const price = `${w.avgCt.toFixed(1).replace(".", ",")} ct/kWh`;
+          const ct = w.avgCt.toFixed(1).replace(".", ",");
+          const tipText = (w.date === "today" || showToday)
+            ? (lang === "en"
+                ? `Cheaper from ${w.label} · ø ${ct} ct`
+                : `💡 Ab ${w.label} günstiger · ø ${ct} ct`)
+            : (lang === "en"
+                ? `Tomorrow: cheaper from ${w.label} · ø ${ct} ct`
+                : `💡 Morgen: günstiger ab ${w.label} · ø ${ct} ct`);
           return (
-            <Text style={[styles.tip, { color: T.sub }]}>
-              {lang === "en" ? `💡 Cheapest: ${when} · ${price}` : `💡 Günstigste Phase: ${when} · ${price}`}
-            </Text>
+            <Text style={[styles.tip, { color: T.sub }]}>{tipText}</Text>
           );
         })()}
       </View>

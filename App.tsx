@@ -25,7 +25,7 @@ import { fetchAppData }                          from "./lib/fetcher";
 import { loadSettings, saveSettings }            from "./lib/settings";
 import { adjustPriceCt, adjustDayData }          from "./lib/pricing";
 import { addClaim, removeLastClaim }             from "./lib/savings";
-import { scheduleAllUpcomingNotifications }       from "./lib/notifications";
+import { scheduleAllUpcomingNotifications, ensureAndroidChannel } from "./lib/notifications";
 import type { AppData }                          from "./lib/types";
 import type { AppSettings, Device, Timing }      from "./lib/settings";
 import { ThemeContext, LIGHT, DARK }             from "./lib/theme";
@@ -108,6 +108,8 @@ function AppInner() {
   // ── Load persisted settings ───────────────────────────────
   useEffect(() => {
     loadSettings().then(setSettings);
+    // Ensure Android notification channel exists before any scheduling
+    ensureAndroidChannel().catch(e => console.warn("[App] Channel init failed:", e));
   }, []);
 
   // ── Fetch price data ──────────────────────────────────────
@@ -128,8 +130,8 @@ function AppInner() {
           s.device,
           s.timing,
           s.language ?? "de",
-          s.notifyFireAt,          // re-use user's explicit pick if still future
-        ).catch(() => {});
+          s.notifyFireAt,
+        ).catch(e => console.warn("[App] Notification scheduling failed:", e));
       }
     } catch (e: any) {
       setError(t("errorLoad"));
