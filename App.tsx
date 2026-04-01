@@ -6,6 +6,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, ScrollView, Pressable, StyleSheet,
   RefreshControl, ActivityIndicator, TouchableOpacity,
+  Alert, Linking,
 } from "react-native";
 import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -426,7 +427,24 @@ function AppInner() {
                 <Text style={[styles.notifyPrompt, { color: T.sub, flex: 1 }]}>{t("notifyPrompt")}</Text>
                 <TouchableOpacity
                   style={[styles.notifyBtn, { borderColor: T.inputBorder }]}
-                  onPress={() => setNotifyOpen(true)}
+                  onPress={async () => {
+                    // Pre-check: if permanently denied, go straight to settings guide
+                    const perm = await Notifications.getPermissionsAsync();
+                    if (!perm.canAskAgain && perm.status !== "granted") {
+                      Alert.alert(
+                        lang === "en" ? "Notifications blocked" : "Benachrichtigungen blockiert",
+                        lang === "en"
+                          ? "Please enable notifications for StromAmpel in Settings → Apps → StromAmpel → Notifications."
+                          : "Bitte aktiviere Benachrichtigungen unter Einstellungen → Apps → StromAmpel → Benachrichtigungen.",
+                        [
+                          { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
+                          { text: lang === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() },
+                        ]
+                      );
+                      return;
+                    }
+                    setNotifyOpen(true);
+                  }}
                   activeOpacity={0.7}
                 >
                   <Text style={[styles.notifyBtnText, { color: T.sub }]}>{t("notifyYes")}</Text>

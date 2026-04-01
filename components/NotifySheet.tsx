@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, Pressable, StyleSheet, Modal,
-  Animated, TouchableOpacity, Alert, ScrollView,
+  Animated, TouchableOpacity, Alert, ScrollView, Linking,
 } from "react-native";
 import * as Notifications from "expo-notifications";
 import type { Device, Timing } from "../lib/settings";
@@ -109,23 +109,63 @@ export default function NotifySheet({
   const fireLabel   = `${pad2(fireAtDate.getHours())}:${pad2(fireAtDate.getMinutes())} Uhr`;
 
   async function handleActivate() {
-    const { status } = await Notifications.requestPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(
-        lang === "en" ? "Notifications disabled" : "Benachrichtigungen deaktiviert",
-        lang === "en" ? "Please enable in settings." : "Bitte in den Einstellungen erlauben.",
-      );
+    // Step 1: Check current permission status first
+    const existing = await Notifications.getPermissionsAsync();
+
+    if (existing.status === "granted") {
+      // Already granted — proceed directly
+      if (!fireAtValid) {
+        Alert.alert(
+          lang === "en" ? "Time already passed" : "Zeit bereits vergangen",
+          lang === "en" ? "Please choose a later hour." : "Bitte eine spätere Stunde wählen.",
+        );
+        return;
+      }
+      onActivate(device, timing, fireAtDate.getTime());
+      onClose();
       return;
     }
-    if (!fireAtValid) {
-      Alert.alert(
-        lang === "en" ? "Time already passed" : "Zeit bereits vergangen",
-        lang === "en" ? "Please choose a later hour." : "Bitte eine spätere Stunde wählen.",
-      );
+
+    // Step 2: Permission not granted — can we still ask?
+    if (existing.canAskAgain) {
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== "granted") {
+        // User just denied — show simple info
+        Alert.alert(
+          lang === "en" ? "Permission needed" : "Berechtigung erforderlich",
+          lang === "en"
+            ? "Notifications are needed to remind you. You can enable them in Settings."
+            : "Benachrichtigungen sind nötig, damit wir dich erinnern können.",
+        );
+        return;
+      }
+      // Granted — proceed
+      if (!fireAtValid) {
+        Alert.alert(
+          lang === "en" ? "Time already passed" : "Zeit bereits vergangen",
+          lang === "en" ? "Please choose a later hour." : "Bitte eine spätere Stunde wählen.",
+        );
+        return;
+      }
+      onActivate(device, timing, fireAtDate.getTime());
+      onClose();
       return;
     }
-    onActivate(device, timing, fireAtDate.getTime());
-    onClose();
+
+    // Step 3: Permanently denied — must open system settings
+    Alert.alert(
+      lang === "en" ? "Notifications blocked" : "Benachrichtigungen blockiert",
+      lang === "en"
+        ? "StromAmpel needs notification permission. Please enable it in your phone's Settings → Apps → StromAmpel → Notifications."
+        : "StromAmpel benötigt die Benachrichtigungsberechtigung. Bitte aktiviere sie unter Einstellungen → Apps → StromAmpel → Benachrichtigungen.",
+      [
+        { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
+        {
+          text: lang === "en" ? "Open Settings" : "Zu den Einstellungen",
+          onPress: () => Linking.openSettings(),
+        },
+      ]
+    );
   }
 
   // Slots for TimelineBar (full day)
