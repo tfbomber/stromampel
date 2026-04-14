@@ -1,12 +1,12 @@
 // ============================================================
-// App.tsx — Main screen for StromAmpel Android
+// App.tsx — Main screen for Strom Ampel Android
 // ============================================================
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   View, Text, ScrollView, Pressable, StyleSheet,
   RefreshControl, ActivityIndicator, TouchableOpacity,
-  Alert, Linking,
+  Alert, Linking, AppState, AppStateStatus, Platform,
 } from "react-native";
 import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -16,19 +16,17 @@ import HeroCard        from "./components/HeroCard";
 import TimelineBar     from "./components/TimelineBar";
 import SettingsSheet   from "./components/SettingsSheet";
 import NotifySheet     from "./components/NotifySheet";
-import DeviceSavings   from "./components/DeviceSavings";
-import SavingsSummary  from "./components/SavingsSummary";
+import SavingsScenarios from "./components/SavingsScenarios";
 import FeedbackSheet   from "./components/FeedbackSheet";
 import PrivacyConsentModal from "./components/PrivacyConsentModal";
 import { logAppOpen } from "./lib/analytics";
 
 import { fetchAppData }                          from "./lib/fetcher";
 import { loadSettings, saveSettings }            from "./lib/settings";
-import { adjustPriceCt, adjustDayData }          from "./lib/pricing";
-import { addClaim, removeLastClaim }             from "./lib/savings";
-import { scheduleAllUpcomingNotifications, ensureAndroidChannel } from "./lib/notifications";
+// lib/savings claim functions no longer used (claim model removed)
+import { scheduleAllUpcomingNotifications, ensureAndroidChannel, checkExactAlarmPermission } from "./lib/notifications";
 import type { AppData }                          from "./lib/types";
-import type { AppSettings, Device, Timing }      from "./lib/settings";
+import type { AppSettings, Timing, NotifyMode }  from "./lib/settings";
 import { ThemeContext, LIGHT, DARK }             from "./lib/theme";
 import { I18nContext, makeI18n, useI18n }        from "./lib/i18n";
 
@@ -38,7 +36,7 @@ try {
     handleNotification: async () => ({
       shouldShowBanner: true,
       shouldShowList:   true,
-      shouldPlaySound:  false,
+      shouldPlaySound:  true,   // NOTE: false suppresses Android drop-down banners
       shouldSetBadge:   false,
     }),
   });
@@ -84,10 +82,6 @@ export default function App() {
   );
 }
 
-// ── Inner: reads settings.language to build i18n context ────
-function AppInnerWithI18n() {
-  return <AppInner />;
-}
 
 // ── Main app component ───────────────────────────────────────
 function AppInner() {
@@ -99,9 +93,11 @@ function AppInner() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notifyOpen,   setNotifyOpen]   = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [claimsRefreshKey, setClaimsRefreshKey] = useState(0);
+  // claimsRefreshKey removed — claim model replaced by SavingsScenarios
   // Shared timeline selection: only one bar active at a time
   const [activeBarSel, setActiveBarSel] = useState<{ barId: string; hour: number } | null>(null);
+  // langRef: keeps current language accessible inside stale useCallback closures
+  const langRef = useRef<"de" | "en">("de");
 
   const makeOnChange = (barId: string) => (hour: number | null) =>
     setActiveBarSel(hour !== null ? { barId, hour } : null);
@@ -111,6 +107,8 @@ function AppInner() {
     loadSettings().then(setSettings);
     // Ensure Android notification channel exists before any scheduling
     ensureAndroidChannel().catch(e => console.warn("[App] Channel init failed:", e));
+    // Diagnose Android 12+ exact alarm permission (logs error if missing)
+    checkExactAlarmPermission().catch(e => console.warn("[App] Exact alarm check failed:", e));
   }, []);
 
   // ── Fetch price data ──────────────────────────────────────
@@ -126,16 +124,28 @@ function AppInner() {
       // to stay current. Uses latest settings from AsyncStorage.
       const s = await import("./lib/settings").then((m) => m.loadSettings());
       if (s.notifyActive) {
-        scheduleAllUpcomingNotifications(
-          d,
-          s.device,
-          s.timing,
-          s.language ?? "de",
-          s.notifyFireAt,
-        ).catch(e => console.warn("[App] Notification scheduling failed:", e));
+        // "once" mode: if notifyFireAt has expired → auto-reset to off
+        if (s.notifyMode === "once" && s.notifyFireAt && s.notifyFireAt <= Date.now()) {
+          console.log(`[App] once-mode expired (${new Date(s.notifyFireAt).toISOString()}) — resetting notifyActive=false`);
+          const { saveSettings } = await import("./lib/settings");
+          await saveSettings({ notifyActive: false, notifyFireAt: undefined });
+          // Don't schedule
+        } else {
+          const futureFireAt = s.notifyMode === "once" && s.notifyFireAt && s.notifyFireAt > Date.now()
+            ? s.notifyFireAt : undefined;
+          scheduleAllUpcomingNotifications(
+            d,
+            s.notifyMode ?? "daily_smart",
+            s.timing,
+            s.language ?? "de",
+            futureFireAt,
+            s.surchargeCt ?? 23,
+          ).catch(e => console.warn("[App] Notification scheduling failed:", e));
+        }
       }
     } catch (e: any) {
-      setError(t("errorLoad"));
+      // Use langRef (not stale t) to pick error message language (ISSUE-3 fix)
+      setError(langRef.current === "en" ? "Failed to load prices." : "Preise konnten nicht geladen werden.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -147,10 +157,34 @@ function AppInner() {
   // Log app open (Firestore + native analytics)
   useEffect(() => { logAppOpen(); }, []);
 
-
-  // Auto-refresh every 15 minutes
+  // Re-schedule notifications when app comes back to foreground.
+  // Prevents missed reschedule if the app was closed for hours.
+  // Guard window in notifications.ts protects imminent user-picks.
+  const appState = useRef<AppStateStatus>(AppState.currentState);
   useEffect(() => {
-    const timer = setInterval(() => load(true), 15 * 60 * 1000);
+    const sub = AppState.addEventListener("change", (nextState) => {
+      const wasBackground = appState.current === "background" || appState.current === "inactive";
+      const nowActive     = nextState === "active";
+      if (wasBackground && nowActive) {
+        console.log("[App] Foreground resume — triggering silent refresh + reschedule");
+        // NOTE: do NOT call dismissAllNotificationsAsync() here —
+        // it would wipe background-delivered notifications from the tray
+        // before the user has a chance to see them.
+        load(true);
+      }
+      appState.current = nextState;
+    });
+    return () => sub.remove();
+  }, [load]);
+
+  // Auto-refresh data every 15 minutes (foreground only via AppState guard above).
+  // Notification reschedule is protected by GUARD_MS window in notifications.ts.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (AppState.currentState === "active") {
+        load(true);
+      }
+    }, 15 * 60 * 1000);
     return () => clearInterval(timer);
   }, [load]);
 
@@ -167,46 +201,72 @@ function AppInner() {
   }
 
   // ── Notify activation ─────────────────────────────────────────
-  async function handleNotifyActivate(device: Device, timing: Timing, fireAtEpoch: number) {
-    await handleSettingsChange({ notifyActive: true, device, timing, notifyFireAt: fireAtEpoch });
-    // Immediately schedule — don't wait for next 15-min auto-refresh
+  async function handleNotifyActivate(mode: NotifyMode, timing: Timing, fireAtEpoch?: number) {
+    await handleSettingsChange({
+      notifyActive: true,
+      notifyMode:   mode,
+      timing,
+      notifyFireAt: fireAtEpoch,
+    });
     if (data) {
       scheduleAllUpcomingNotifications(
-        data, device, timing, settings?.language ?? "de", fireAtEpoch
+        data, mode, timing, settings?.language ?? "de", fireAtEpoch, surchargeCt
       ).catch(() => {});
+    }
+    showBatteryOptimizationPromptOnce(settings?.language ?? "de");
+  }
+
+  /** Show a one-time Alert guiding the user to disable battery optimisation.
+   *  Stored in AsyncStorage under key "sa_battery_prompt_v1" so it only ever fires once.
+   *  Android only — silently skipped on iOS. */
+  async function showBatteryOptimizationPromptOnce(lang: "de" | "en") {
+    if (Platform.OS !== "android") return;
+    try {
+      const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
+      const alreadyShown = await AsyncStorage.getItem("sa_battery_prompt_v1");
+      if (alreadyShown) return;
+      // Mark as shown BEFORE the timeout so a force-close can't re-trigger it
+      await AsyncStorage.setItem("sa_battery_prompt_v1", "1");
+      // Delay 700 ms so the NotifySheet close animation finishes first
+      setTimeout(() => {
+        Alert.alert(
+          lang === "en" ? "Improve notification timing" : "Pünktlichere Benachrichtigungen",
+          lang === "en"
+            ? "Android's battery saver can delay alerts by 10–20 min.\n\nTo fix this: Settings → Battery → Battery Optimisation → find Strom Ampel → select \'Don\'t Optimise\'"
+            : "Androids Akkusparmodus kann Erinnerungen um 10–20 Min. verzögern.\n\nSo beheben: Einstellungen → Akku → Akkuoptimierung → Strom Ampel auswählen → Nicht optimieren",
+          [
+            { text: lang === "en" ? "Later" : "Später", style: "cancel" },
+            {
+              text: lang === "en" ? "Open Settings" : "Zu den Einstellungen",
+              onPress: () => Linking.openSettings(),
+            },
+          ]
+        );
+      }, 700);
+    } catch (e) {
+      console.warn("[App] Battery prompt check failed:", e);
     }
   }
 
-  // ── Claim savings ─────────────────────────────────────────
-  async function handleClaim(device: string, kWh: number, savingEur: number) {
-    await addClaim(device, kWh, savingEur);
-    setClaimsRefreshKey((k) => k + 1);
-  }
+  // Claim / cancel functions removed — SavingsScenarios is purely passive
 
-  // ── Cancel / undo a claim ────────────────────────────────
-  async function handleCancelClaim(device: string) {
-    await removeLastClaim(device);
-    setClaimsRefreshKey((k) => k + 1);
-  }
+  // Keep langRef in sync with current settings language so stale useCallback
+  // closures (e.g. load) can safely read the current language (ISSUE-3 fix).
+  langRef.current = settings?.language ?? "de";
 
   // ── Derived data (raw spot) ───────────────────────────────
   const rawCurrent  = data?.current ?? null;
   const rawToday    = data?.today ?? null;
   const rawTomorrow = data?.tomorrow ?? null;
 
-  // ── Provider-adjusted pricing ─────────────────────────────
-  const anbieter     = settings?.anbieter ?? "";
-  const adjToday     = adjustDayData(rawToday,    anbieter);
-  const adjTomorrow  = adjustDayData(rawTomorrow, anbieter);
-  const adjCurrentPriceCt = rawCurrent?.priceCt != null
-    ? adjustPriceCt(rawCurrent.priceCt, anbieter)
-    : null;
-  const current = rawCurrent ? { ...rawCurrent, priceCt: adjCurrentPriceCt } : null;
-  const today   = adjToday;
-  const tomorrow = adjTomorrow;
+  // Use raw spot prices directly; effective price computed in HeroCard via surchargeCt
+  const current  = rawCurrent;
+  const today    = rawToday;
+  const tomorrow = rawTomorrow;
 
   const nextCheap   = today?.nextCheapWindow ?? tomorrow?.cheapestWindow ?? null;
   const cheapWindow = today?.nextCheapWindow ?? tomorrow?.cheapestWindow ?? null;
+  const surchargeCt = settings?.surchargeCt ?? 23;
 
   // Theme tokens
   const T = settings?.theme === "dark" ? DARK : LIGHT;
@@ -216,14 +276,7 @@ function AppInner() {
   const { t }  = i18n;
   const locale = lang === "de" ? "de-DE" : "en-GB";
 
-  // Find cheapUntilHour for GREEN status
-  const nowHour = new Date().getHours();
-  let cheapUntilHour: number | null = null;
-  if (current?.status === "GREEN" && today) {
-    const futureSlots = today.slots.filter((s) => s.hour > nowHour);
-    const endSlot = futureSlots.find((s) => s.status !== "GREEN");
-    if (endSlot) cheapUntilHour = endSlot.hour;
-  }
+  // cheapUntilHour removed — HeroCard v4 uses unified coreLabel from CheapWindow
 
   // Tomorrow date label e.g. "26. Mär." / "26 Mar."
   const tomorrowDate = (() => {
@@ -235,12 +288,6 @@ function AppInner() {
   const todayDateObj    = new Date();
   const tomorrowDateObj = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d; })();
 
-  // Anbieter display label
-  const ANBIETER_LABELS: Record<string, string> = {
-    tibber: "Tibber", awattar: "aWATTar", ostrom: "Ostrom",
-    eprimo: "eprimo", other: "Sonstiger",
-  };
-  const anbieterLabel = settings?.anbieter ? ANBIETER_LABELS[settings.anbieter] ?? settings.anbieter : null;
 
   // ── Loading state ─────────────────────────────────────────
   if (loading && !data) {
@@ -292,15 +339,15 @@ function AppInner() {
         >
           {/* ── Header ────────────────────────────────── */}
           <View style={styles.header}>
-            <View style={{ flex: 1 }} />
+            <View style={styles.headerLeft} />
             <View style={styles.headerCenter}>
-              <Text style={[styles.appTitle, { color: T.text }]}>StromAmpel</Text>
-              <Text style={[styles.appSub, { color: T.sub }]}>{t("appSub")}</Text>
-              {anbieterLabel && (
-                <Text style={[styles.anbieterBadge, { color: "#15803d" }]}>
-                  ⚡ {anbieterLabel}
-                </Text>
-              )}
+              <Text style={[styles.appTitle, { color: T.text }]}>Strom Ampel</Text>
+              <Text
+                style={[styles.appSub, { color: T.sub }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >{t("appSub")}</Text>
             </View>
             <View style={styles.headerRight}>
               <Pressable onPress={() => setSettingsOpen(true)} hitSlop={12} style={styles.gearBtn}>
@@ -313,33 +360,49 @@ function AppInner() {
           <HeroCard
             current={current}
             nextCheap={nextCheap}
-            cheapUntilHour={cheapUntilHour}
+            surchargeCt={surchargeCt}
           />
 
           {/* ── Fixed tariff notice ───────────────────── */}
-          {settings?.tariffType === "fixed" && (
-            <View style={[styles.card, styles.fixedNotice, { backgroundColor: T.card }]}>
-              <Text style={styles.fixedNoticeIcon}>🔒</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.fixedNoticeTitle, { color: T.text }]}>{t("fixedActive")}</Text>
-                <Text style={[styles.fixedNoticeSub, { color: T.sub }]}>{t("fixedActiveSub")}</Text>
+          {settings?.tariffType === "fixed" && (() => {
+            // FOMO: compute avg spot vs current price (surcharge cancels out)
+            const allCts = today?.slots
+              .filter(s => s.priceCt !== null && !s.isPast)
+              .map(s => s.priceCt!) ?? [];
+            const avgCt = allCts.length > 0
+              ? allCts.reduce((a, b) => a + b, 0) / allCts.length
+              : null;
+            // Use cheapest remaining window as reference for max potential saving
+            const cheapRef = today?.nextCheapWindow?.coreAvgCt ?? today?.cheapestWindow?.coreAvgCt ?? null;
+            const diffCt = current?.priceCt != null && cheapRef != null
+              ? current.priceCt - cheapRef
+              : null;
+            const showFomo = diffCt !== null && diffCt > 3;
+
+            return (
+              <View style={[styles.card, styles.fixedNotice, { backgroundColor: T.card }]}>
+                <Text style={styles.fixedNoticeIcon}>🔒</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.fixedNoticeTitle, { color: "#dc2626" }]}>{t("fixedActive")}</Text>
+                  <Text style={[styles.fixedNoticeSub, { color: T.sub }]}>{t("fixedActiveSub")}</Text>
+                  {showFomo && (
+                    <Text style={[styles.fixedNoticeFomo, { color: "#b45309" }]}>
+                      {(lang === "en"
+                        ? `Today dynamic would be ≈${diffCt!.toFixed(1).replace(".", ",")} ct cheaper`
+                        : `Heute wäre Strom ≈${diffCt!.toFixed(1).replace(".", ",")} ct günstiger`)}
+                    </Text>
+                  )}
+                </View>
               </View>
-            </View>
-          )}
+            );
+          })()}
 
-          {/* ── Weekly savings (outcome first) ────────── */}
-          <SavingsSummary refreshKey={claimsRefreshKey} />
-
-          {/* ── Device savings (action area) ───────────────────── */}
-          <DeviceSavings
-            todaySlots={today?.slots ?? []}
+          {/* ── Savings scenarios (passive hint, no interaction) ── */}
+          <SavingsScenarios
             currentPriceCt={current?.priceCt ?? null}
-            tariffType={settings?.tariffType ?? "dynamic"}
+            nextCheap={nextCheap}
             currentStatus={current?.status ?? "UNKNOWN"}
-            todayNextWindow={today?.nextCheapWindow ?? null}
-            tomorrowBestWindow={tomorrow?.cheapestWindow ?? null}
-            onClaim={handleClaim}
-            onCancel={handleCancelClaim}
+            tariffType={settings?.tariffType ?? "dynamic"}
           />
 
           {/* ── Today (context) ───────────────────────── */}
@@ -354,7 +417,7 @@ function AppInner() {
                   <Text style={[styles.sectionTitle, { color: T.text }]}>{t("today")}</Text>
                 </View>
                 {today.nextCheapWindow && (
-                  <Text style={[styles.sectionBadge, { color: T.sub }]}>{t("cheapFrom")} {today.nextCheapWindow.label}</Text>
+                  <Text style={[styles.sectionBadge, { color: T.sub }]}>{t("cheapFrom")} {today.nextCheapWindow.coreLabel}</Text>
                 )}
               </View>
               <TimelineBar
@@ -362,6 +425,7 @@ function AppInner() {
                 isToday={true}
                 activeHour={activeBarSel?.barId === "today" ? activeBarSel.hour : null}
                 onActiveHourChange={makeOnChange("today")}
+                surchargeCt={surchargeCt}
               />
             </Pressable>
           )}
@@ -379,7 +443,7 @@ function AppInner() {
                 </View>
                 {tomorrow.cheapestWindow && (
                   <Text style={[styles.sectionBadge, { color: T.sub }]}>
-                    {t("best")} {tomorrow.cheapestWindow.label} · {tomorrow.cheapestWindow.avgCt.toFixed(1).replace(".", ",")} ct
+                    {t("best")} {tomorrow.cheapestWindow.label} · ≈ {(tomorrow.cheapestWindow.avgCt + surchargeCt).toFixed(1).replace(".", ",")} ct
                   </Text>
                 )}
               </View>
@@ -388,6 +452,7 @@ function AppInner() {
                 isToday={false}
                 activeHour={activeBarSel?.barId === "tomorrow" ? activeBarSel.hour : null}
                 onActiveHourChange={makeOnChange("tomorrow")}
+                surchargeCt={surchargeCt}
               />
             </Pressable>
           ) : (
@@ -401,44 +466,99 @@ function AppInner() {
             </View>
           )}
 
-          {/* ── Notify CTA (one-time setup, below charts) */}
+          {/* ── Notify CTA ───────────────────────────── */}
           <View style={[styles.card, styles.notifyRow, { backgroundColor: T.card }]}>
-            {settings?.notifyActive ? (
+            {settings?.notifyActive ? (() => {
+              // ── Compute next trigger time from scheduled windows ──
+              const isOnce = settings.notifyMode === "once";
+              const timingMin: number = settings.timing ?? 0;
+
+              // Next fire epoch
+              let nextFireMs: number | null = null;
+              if (isOnce && settings.notifyFireAt && settings.notifyFireAt > Date.now()) {
+                nextFireMs = settings.notifyFireAt;
+              } else if (!isOnce) {
+                // daily_smart: derive from today's or tomorrow's cheapest window
+                const todayCore = today?.nextCheapWindow ?? today?.cheapestWindow ?? null;
+                const tomorrowCore = tomorrow?.cheapestWindow ?? null;
+                const now = new Date();
+                if (todayCore && todayCore.startHour > now.getHours()) {
+                  const d = new Date(); d.setHours(todayCore.startHour, 0, 0, 0);
+                  const fire = d.getTime() - timingMin * 60_000;
+                  if (fire > Date.now()) nextFireMs = fire;
+                }
+                if (!nextFireMs && tomorrowCore) {
+                  const d = new Date(); d.setDate(d.getDate() + 1);
+                  d.setHours(tomorrowCore.startHour, 0, 0, 0);
+                  nextFireMs = d.getTime() - timingMin * 60_000;
+                }
+              }
+
+              // Format next fire time for display
+              const nextFireLabel = (() => {
+                if (!nextFireMs) return null;
+                const fireDate = new Date(nextFireMs);
+                const hh = fireDate.getHours().toString().padStart(2, "0");
+                const mm = fireDate.getMinutes().toString().padStart(2, "0");
+                const isToday = new Date().toDateString() === fireDate.toDateString();
+                const dayLabel = isToday
+                  ? (lang === "en" ? "Today" : "Heute")
+                  : (lang === "en" ? "Tomorrow" : "Morgen");
+                return `${dayLabel} ${hh}:${mm}`;
+              })();
+
+              // Mode + timing chip text
+              const modeChip = isOnce
+                ? (lang === "en" ? "One-time" : "Einmalig")
+                : (lang === "en" ? "Daily" : "Täglich");
+              const timingChip = timingMin === 0
+                ? (lang === "en" ? "on start" : "bei Start")
+                : timingMin === 30
+                  ? "30 Min."
+                  : (lang === "en" ? "1 hr" : "1 Std.");
+
+              return (
+                <>
+                  {/* Left: icon + compact label stack */}
+                  <Text style={styles.notifyIcon}>🔔</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.notifyModeLine, { color: T.text }]}>
+                      {modeChip}
+                      <Text style={{ color: T.sub, fontWeight: "400" }}> · {timingChip}</Text>
+                      {nextFireLabel && (
+                        <Text style={{ color: T.sub, fontWeight: "400" }}>
+                          {"  ›  "}{nextFireLabel}
+                        </Text>
+                      )}
+                    </Text>
+                  </View>
+                  {/* Right: action links */}
+                  <Pressable onPress={() => setNotifyOpen(true)} hitSlop={8}>
+                    <Text style={[styles.notifyEdit, { color: T.sub }]}>{t("notifyChange")}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => handleSettingsChange({ notifyActive: false })} hitSlop={8}>
+                    <Text style={styles.notifyDisable}>{t("notifyOff")}</Text>
+                  </Pressable>
+                </>
+              );
+            })() : (
               <>
-                <Text style={[styles.notifyActive, { color: T.text, flex: 1 }]}>
-                  {(() => {
-                    const fireAt = settings.notifyFireAt ? new Date(settings.notifyFireAt) : null;
-                    const timeStr = fireAt && fireAt > new Date()
-                      ? `${fireAt.getHours().toString().padStart(2, "0")}:${fireAt.getMinutes().toString().padStart(2, "0")} Uhr`
-                      : null;
-                    const devLabel = settings.device === "allgemein" ? t("allgemein") : settings.device;
-                    return `🔔 ${timeStr ? (lang === "en" ? `Reminder at ${timeStr}` : `Erinnerung um ${timeStr}`) : (settings.timing === 0 ? t("notifyOnStart") : settings.timing === 30 ? t("notifyBefore30") : t("notifyBefore60"))} · ${devLabel}`;
-                  })()}
+                <Text style={[styles.notifyPrompt, { color: T.sub, flex: 1 }]}>
+                  🔔 {t("notifyPrompt")}
                 </Text>
-                <Pressable onPress={() => setNotifyOpen(true)}>
-                  <Text style={[styles.notifyEdit, { color: T.sub }]}>{t("notifyChange")}</Text>
-                </Pressable>
-                <Pressable onPress={() => handleSettingsChange({ notifyActive: false })}>
-                  <Text style={styles.notifyDisable}>{t("notifyOff")}</Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                <Text style={[styles.notifyPrompt, { color: T.sub, flex: 1 }]}>{t("notifyPrompt")}</Text>
                 <TouchableOpacity
                   style={[styles.notifyBtn, { borderColor: T.inputBorder }]}
                   onPress={async () => {
-                    // Pre-check: if permanently denied, go straight to settings guide
                     const perm = await Notifications.getPermissionsAsync();
                     if (!perm.canAskAgain && perm.status !== "granted") {
                       Alert.alert(
                         lang === "en" ? "Notifications blocked" : "Benachrichtigungen blockiert",
                         lang === "en"
-                          ? "Please enable notifications for StromAmpel in Settings → Apps → StromAmpel → Notifications."
-                          : "Bitte aktiviere Benachrichtigungen unter Einstellungen → Apps → StromAmpel → Benachrichtigungen.",
+                          ? "Enable in Settings → Apps → Strom Ampel → Notifications."
+                          : "Unter Einstellungen → Apps → Strom Ampel → Benachrichtigungen aktivieren.",
                         [
                           { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
-                          { text: lang === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() },
+                          { text: lang === "en" ? "Open Settings" : "Einstellungen", onPress: () => Linking.openSettings() },
                         ]
                       );
                       return;
@@ -456,9 +576,7 @@ function AppInner() {
           {/* ── Footer ────────────────────────────────── */}
           <View style={styles.footerSection}>
             <Text style={[styles.footerAttrib, { color: T.footer }]}>
-              {anbieterLabel
-                ? t("spotWithProvider").replace("{p}", anbieterLabel)
-                : t("spotRef")}
+              {t("spotRef")}
             </Text>
             <View style={[styles.footerDivider, { backgroundColor: T.border }]} />
             <Pressable onPress={() => setFeedbackOpen(true)} hitSlop={10}>
@@ -512,10 +630,11 @@ const styles = StyleSheet.create({
   retryBtn:        { backgroundColor: "#111827", paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10 },
   retryText:       { color: "#fff", fontWeight: "600", fontSize: 14 },
   header:          { flexDirection: "row", alignItems: "center", paddingTop: 6, paddingBottom: 12 },
-  headerCenter:    { flex: 2, alignItems: "center" },
-  headerRight:     { flex: 1, alignItems: "flex-end" },
+  headerLeft:      { width: 44 },
+  headerCenter:    { flex: 1, alignItems: "center" },
+  headerRight:     { width: 44, alignItems: "flex-end" },
   appTitle:        { fontSize: 20, fontWeight: "700" },
-  appSub:          { fontSize: 11, marginTop: 1, opacity: 0.6 },
+  appSub:          { fontSize: 13, marginTop: 1, opacity: 0.6 },
   anbieterBadge:   { fontSize: 10, marginTop: 3, paddingHorizontal: 8, paddingVertical: 2,
                      borderRadius: 10, backgroundColor: "#f0fdf4", color: "#15803d" },
   gearBtn:         { padding: 4 },
@@ -528,16 +647,19 @@ const styles = StyleSheet.create({
   sectionHeader:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
   sectionTitle:    { fontSize: 14, fontWeight: "600" },
   sectionBadge:    { fontSize: 11, opacity: 0.65 },
-  // Notify row
-  notifyRow:       { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12 },
-  notifyActive:    { fontSize: 12, fontWeight: "500" },
-  notifyEdit:      { fontSize: 11, textDecorationLine: "underline", opacity: 0.7 },
-  notifyDisable:   { fontSize: 11, color: "#ef4444", opacity: 0.8 },
+  // Notify row — compact single-line
+  notifyRow:       { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9 },
+  notifyIcon:      { fontSize: 13, opacity: 0.75 },
+  notifyModeLine:  { fontSize: 12, fontWeight: "600", lineHeight: 16 },
+  notifyActive:    { fontSize: 12, fontWeight: "600" },      // kept for any fallback refs
+  notifySchedule:  { fontSize: 11, marginTop: 2, opacity: 0.65 },  // kept
+  notifyEdit:      { fontSize: 11, textDecorationLine: "underline", opacity: 0.65 },
+  notifyDisable:   { fontSize: 11, color: "#ef4444", opacity: 0.75 },
   notifyPrompt:    { fontSize: 12, opacity: 0.65 },
   // Outline style — lightweight, informational
-  notifyBtn:       { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8,
+  notifyBtn:       { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 7,
                      borderWidth: 1, alignItems: "center" },
-  notifyBtnText:   { fontWeight: "500", fontSize: 12 },
+  notifyBtnText:   { fontWeight: "500", fontSize: 11 },
   // Footer
   footerSection:   { marginTop: 16, alignItems: "center", gap: 5 },
   footerAttrib:    { fontSize: 9, textAlign: "center", lineHeight: 13 },
@@ -553,4 +675,5 @@ const styles = StyleSheet.create({
   fixedNoticeIcon:  { fontSize: 18, opacity: 0.85 },
   fixedNoticeTitle: { fontSize: 12, fontWeight: "600" },
   fixedNoticeSub:   { fontSize: 10, marginTop: 2, lineHeight: 14, opacity: 0.7 },
+  fixedNoticeFomo:  { fontSize: 10, marginTop: 3, fontWeight: "600", lineHeight: 14 },
 });

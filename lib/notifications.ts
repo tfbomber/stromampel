@@ -1,68 +1,46 @@
 // ============================================================
-// lib/notifications.ts — Schedule notifications aligned with HeroCard
+// lib/notifications.ts — Schedule notifications (v4)
 //
-// ROOT CAUSE FIXES (v2):
-//   1. Android 8+ requires setNotificationChannelAsync — without it
-//      ALL local notifications are silently dropped.
-//   2. Notification content must include channelId matching the channel.
-//   3. Errors were silently swallowed — now logged verbosely.
-//   4. Quiet-hours filter removed for user-picked notifications
-//      (user explicitly chose the time).
+// Two notification modes:
+//   "once"        — fires at user-picked time, then app resets to off on next
+//                   foreground open (detected in App.tsx via notifyFireAt expiry)
+//   "daily_smart" — fires every day at the start of the cheapest 3h core block
+//                   (= HeroCard coreLabel startHour − timing minutes)
+//
+// Android fixes (v3, retained):
+//   1. setNotificationChannelAsync required on Android 8+
+//   2. channelId must be present in content
+//   3. SchedulableTriggerInputTypes.DATE enum (not raw string)
+//   4. Android 12+ exact alarm permission check
 // ============================================================
 
-import { Platform }      from "react-native";
-import * as Notifications from "expo-notifications";
+import { Platform }       from "react-native";
+import * as Notifications  from "expo-notifications";
 import type { AppData, CheapWindow } from "./types";
-import type { Device, Timing }       from "./settings";
+import type { Timing, NotifyMode }   from "./settings";
 
 // ── Android Channel ID ────────────────────────────────────────
-export const CHANNEL_ID = "stromampel_alerts";
+export const CHANNEL_ID = "stromampel_alerts_v3";
 
-// ── Labels ───────────────────────────────────────────────────
-const DEVICE_LABELS_DE: Record<Device, string> = {
-  allgemein:     "Waschen oder Spülen",
-  waschen:       "Waschmaschine",
-  spuelmaschine: "Spülmaschine",
-  trockner:      "Trockner",
-};
-const DEVICE_LABELS_EN: Record<Device, string> = {
-  allgemein:     "Appliances",
-  waschen:       "Washing Machine",
-  spuelmaschine: "Dishwasher",
-  trockner:      "Dryer",
-};
-const DEVICE_EMOJI: Record<Device, string> = {
-  allgemein:     "🏠",
-  waschen:       "🫧",
-  spuelmaschine: "🍽️",
-  trockner:      "🌀",
-};
-
-type WindowType = "next" | "cheapest_today" | "cheapest_tomorrow";
-
-interface PendingNotif {
-  window:   CheapWindow;
-  type:     WindowType;
-  fireAt:   Date;
-  isUserPicked?: boolean;
-}
+// ── Guard window ──────────────────────────────────────────────
+const GUARD_MS       = 10 * 60_000;  // once-mode: skip reschedule if fire is within 10 min
+const SMART_GUARD_MS = 60 * 60_000;  // daily_smart: skip reschedule if any alarm fires within 60 min
 
 /**
  * Create the Android notification channel.
  * MUST be called before scheduling any notification on Android 8+.
- * Safe to call multiple times (idempotent).
  */
 export async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== "android") return;
   try {
     await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name:             "StromAmpel Alerts",
+      name:             "Strom Ampel Alerts",
       importance:       Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 400, 200, 400],
+      vibrationPattern: [0, 800, 400, 800],
       lightColor:       "#22c55e",
       enableVibrate:    true,
-      // 'default' means use the system default notification sound
       sound:            "default",
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
     });
     console.log("[Notifications] Android channel ready:", CHANNEL_ID);
   } catch (e) {
@@ -70,171 +48,208 @@ export async function ensureAndroidChannel(): Promise<void> {
   }
 }
 
-/** Compute fire date for a window (start − timing minutes), respecting tomorrow offset */
-function computeFireAt(window: CheapWindow, timingMinutes: number): Date {
-  const d = new Date();
-  if (window.date === "tomorrow") d.setDate(d.getDate() + 1);
-  d.setHours(window.startHour, 0, 0, 0);
-  return new Date(d.getTime() - timingMinutes * 60_000);
+/**
+ * Check Android 12+ exact alarm permission diagnostic.
+ */
+export async function checkExactAlarmPermission(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  try {
+    const { status, canAskAgain } = await Notifications.getPermissionsAsync();
+    console.log(
+      `[Notifications] Permission check — status=${status} canAskAgain=${canAskAgain}. ` +
+      `SCHEDULE_EXACT_ALARM is declared in app.json android.permissions.`
+    );
+    if (status !== "granted") {
+      console.error("[Notifications] PERMISSION NOT GRANTED — all notifications will be blocked.");
+    }
+  } catch (e: any) {
+    console.error("[Notifications] Permission check failed:", e?.message ?? e);
+  }
 }
 
-/** Build notification title + body for a window */
+/** Compute fire date for a window (startHour − timing minutes). */
+function computeFireAt(startHour: number, date: "today" | "tomorrow", timingMinutes: number): Date {
+  const d = new Date();
+  if (date === "tomorrow") d.setDate(d.getDate() + 1);
+  d.setHours(startHour, 0, 0, 0);
+  const windowStart = d.getTime();
+  const fireAt      = windowStart - timingMinutes * 60_000;
+  return new Date(Math.min(fireAt, windowStart)); // clamp: never fire after window start
+}
+
+/** Build notification title + body using EFFECTIVE price (spot + surchargeCt). */
 function buildContent(
-  type:   WindowType,
   window: CheapWindow,
-  device: Device,
-  lang:   "de" | "en"
+  mode:   NotifyMode,
+  lang:   "de" | "en",
+  surchargeCt: number,
 ): { title: string; body: string } {
-  const devLabel = lang === "en" ? DEVICE_LABELS_EN[device] : DEVICE_LABELS_DE[device];
-  const emoji    = DEVICE_EMOJI[device];
-  const priceStr = `${window.avgCt.toFixed(1).replace(".", ",")} ct/kWh`;
-  const timeStr  = `${window.startHour}:00–${window.endHour}:00`;
+  const effCt    = window.coreAvgCt + surchargeCt;
+  const ct       = `≈ ${effCt.toFixed(1).replace(".", ",")} ct`;
+  const label    = window.coreLabel;
+  const isToday  = window.date === "today";
 
   if (lang === "en") {
-    switch (type) {
-      case "next":
-        return { title: `${emoji} Cheap power window starting soon`, body: `${devLabel}: ${timeStr} · ${priceStr}` };
-      case "cheapest_today":
-        return { title: `⭐ Cheapest electricity today`, body: `Best window: ${timeStr} · ${priceStr} — prepare ${devLabel}` };
-      case "cheapest_tomorrow":
-        return { title: `📅 Tomorrow's cheapest window`, body: `${timeStr} · ${priceStr} — plan ahead for ${devLabel}` };
-    }
+    return mode === "daily_smart"
+      ? { title: "⚡ Daily cheapest window",
+          body:  `${isToday ? "Today" : "Tomorrow"}: ${label} · ø ${ct}/kWh` }
+      : { title: "⚡ Cheap power window starting soon",
+          body:  `${label} · ø ${ct}/kWh` };
   }
-
-  switch (type) {
-    case "next":
-      return { title: `${emoji} Günstige Phase startet gleich`, body: `${devLabel}: ${timeStr} · ${priceStr}` };
-    case "cheapest_today":
-      return { title: `⭐ Günstigste Phase heute`, body: `Bestes Fenster: ${timeStr} · ${priceStr} — ${devLabel} vorbereiten` };
-    case "cheapest_tomorrow":
-      return { title: `📅 Günstigste Phase morgen`, body: `${timeStr} · ${priceStr} — ${devLabel} einplanen` };
-  }
+  return mode === "daily_smart"
+    ? { title: "⚡ Günstigste Phase heute",
+        body:  `${isToday ? "Heute" : "Morgen"}: ${label} · ø ${ct}/kWh` }
+    : { title: "⚡ Günstige Phase startet gleich",
+        body:  `${label} · ø ${ct}/kWh` };
 }
 
 /**
- * Cancel all existing StromAmpel notifications and re-schedule.
+ * Schedule notifications based on notifyMode.
  *
- * If `userPickedFireAt` (epoch ms) is provided and still in the future,
- * that exact time is scheduled as the primary notification (user-pick mode).
- * Otherwise auto-selects HeroCard windows (auto mode, max 2–3/day).
+ * "once" mode:
+ *   Schedules exactly one notification at userPickedFireAt.
+ *   App.tsx detects expiry on next foreground open and resets notifyActive=false.
+ *
+ * "daily_smart" mode:
+ *   Schedules today's (and if available, tomorrow's) cheapest 3h core window.
+ *   Re-scheduled on every foreground resume so it always reflects the latest data.
  */
 export async function scheduleAllUpcomingNotifications(
-  data:             AppData,
-  device:           Device,
-  timing:           Timing,
-  lang:             "de" | "en",
-  userPickedFireAt?: number,   // epoch ms — user's explicit pick
+  data:            AppData,
+  notifyMode:      NotifyMode,
+  timing:          Timing,
+  lang:            "de" | "en",
+  userPickedFireAt?: number,
+  surchargeCt:     number = 23,
 ): Promise<void> {
 
-  // ── 1. Ensure Android channel exists ──────────────────────
+  // ── 1. Channel ────────────────────────────────────────────
   await ensureAndroidChannel();
 
-  // ── 2. Permission check ───────────────────────────────────
+  // ── 2. Permission ─────────────────────────────────────────
   const { status } = await Notifications.getPermissionsAsync();
   if (status !== "granted") {
     console.warn("[Notifications] Permission not granted, skipping schedule");
     return;
   }
 
-  // ── 3. Cancel previous ────────────────────────────────────
+  const now    = new Date();
+  const nowMs  = now.getTime();
+
+  // ── 3. Guard: skip cancel+reschedule if an alarm is imminent ─────────
+  if (notifyMode === "once" && userPickedFireAt) {
+    const msUntil = userPickedFireAt - nowMs;
+    if (msUntil >= -GUARD_MS && msUntil <= GUARD_MS) {
+      console.log(`[Notifications] GUARD(once): fire in ${Math.round(msUntil / 1000)}s — skip reschedule`);
+      return;
+    }
+  }
+
+  if (notifyMode === "daily_smart") {
+    // Check if any already-scheduled notification fires within the next 60 min.
+    // If so, do NOT cancel it — that would destroy the imminent alarm that Doze
+    // is already holding, and rescheduling would push it to tomorrow.
+    try {
+      const existing = await Notifications.getAllScheduledNotificationsAsync();
+      for (const n of existing) {
+        const trigger = n.trigger as any;
+        const scheduledMs: number | null =
+          trigger?.dateMs ?? trigger?.value ?? trigger?.seconds != null
+            ? (trigger.dateMs ?? trigger.value ?? trigger.seconds * 1000)
+            : null;
+        if (scheduledMs && scheduledMs - nowMs <= SMART_GUARD_MS && scheduledMs > nowMs - GUARD_MS) {
+          console.log(`[Notifications] GUARD(daily_smart): alarm in ${Math.round((scheduledMs - nowMs) / 60000)}min — skip reschedule`);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("[Notifications] GUARD check failed, proceeding:", e);
+    }
+  }
+
+  // ── 4. Cancel previous ──────────────────────────────────────────────
   await Notifications.cancelAllScheduledNotificationsAsync();
-  console.log("[Notifications] Cleared all previous notifications");
+  console.log("[Notifications] Cleared previous notifications");
 
-  const now     = new Date();
+  const pending: { window: CheapWindow; fireAt: Date }[] = [];
   const nowHour = now.getHours();
-  const pending: PendingNotif[] = [];
 
-  // ── Mode A: User picked a specific time ───────────────────
-  if (userPickedFireAt && userPickedFireAt > now.getTime()) {
+  // ── 5. Build pending list by mode ─────────────────────────
+  if (notifyMode === "once" && userPickedFireAt && userPickedFireAt > nowMs) {
+    // ONE-TIME: fire at the user-picked epoch exactly
     const fireAt     = new Date(userPickedFireAt);
     const isToday    = fireAt.toDateString() === now.toDateString();
     const targetDate: "today" | "tomorrow" = isToday ? "today" : "tomorrow";
-    // Reconstruct window hour: fireAt + timing minutes
-    const winHour    = Math.min(23, fireAt.getHours() + Math.round(timing / 60));
     const dayData    = isToday ? data.today : data.tomorrow;
+    // Find closest window or synthesize from nearest slot
+    const winHour    = Math.min(23, fireAt.getHours() + Math.round(timing / 60));
     const slot       = dayData?.slots.find(s => s.hour === winHour);
     const avgCt      = slot?.priceCt ?? 0;
-
-    const syntheticWindow: CheapWindow = {
+    const synth: CheapWindow = {
       startHour: winHour,
       endHour:   Math.min(23, winHour + 1),
       label:     `${winHour}:00–${Math.min(23, winHour + 1)}:00`,
       avgCt,
       date:      targetDate,
+      coreLabel:  `${winHour}–${Math.min(23, winHour + 1)} Uhr`,
+      coreAvgCt:  Math.round(avgCt * 10) / 10,
     };
-    pending.push({ window: syntheticWindow, type: "next", fireAt, isUserPicked: true });
-    console.log(`[Notifications] User-pick mode: fireAt=${fireAt.toISOString()} window=${winHour}:00`);
+    pending.push({ window: synth, fireAt });
+    console.log(`[Notifications] once: fireAt=${fireAt.toISOString()} window=${winHour}:00`);
 
-    // Also schedule tomorrow's best window unless user already picked tomorrow
-    const tomorrowBest = data.tomorrow?.cheapestWindow ?? null;
-    if (tomorrowBest && isToday) {
-      pending.push({
-        window: tomorrowBest,
-        type:   "cheapest_tomorrow",
-        fireAt: computeFireAt(tomorrowBest, timing),
-      });
-    }
+  } else if (notifyMode === "daily_smart") {
+    // DAILY SMART: fire at coreLabel startHour - timing for today AND tomorrow
+    const todayCore    = data.today.nextCheapWindow ?? data.today.cheapestWindow ?? null;
+    const tomorrowCore = data.tomorrow?.cheapestWindow ?? null;
 
-  } else {
-    // ── Mode B: Auto HeroCard windows ─────────────────────────
-    console.log("[Notifications] Auto mode: selecting from HeroCard windows");
-    const todayNext     = data.today.nextCheapWindow  ?? null;
-    const todayCheapest = data.today.cheapestWindow   ?? null;
-    const tomorrowBest  = data.tomorrow?.cheapestWindow ?? null;
-
-    if (todayNext && todayNext.startHour > nowHour) {
-      pending.push({ window: todayNext, type: "next", fireAt: computeFireAt(todayNext, timing) });
+    if (todayCore && todayCore.startHour > nowHour) {
+      const fireAt = computeFireAt(todayCore.startHour, "today", timing);
+      if (fireAt > now) {
+        pending.push({ window: todayCore, fireAt });
+        console.log(`[Notifications] daily_smart today: ${todayCore.coreLabel} fireAt=${fireAt.toISOString()}`);
+      }
     }
-    if (todayCheapest && todayCheapest.startHour > nowHour && todayCheapest.startHour !== todayNext?.startHour) {
-      pending.push({ window: todayCheapest, type: "cheapest_today", fireAt: computeFireAt(todayCheapest, timing) });
-    } else if (todayNext && todayCheapest && todayCheapest.startHour === todayNext.startHour && todayNext.startHour > nowHour) {
-      const idx = pending.findIndex(p => p.type === "next");
-      if (idx !== -1) pending[idx].type = "cheapest_today";
-    }
-    if (tomorrowBest) {
-      pending.push({ window: tomorrowBest, type: "cheapest_tomorrow", fireAt: computeFireAt(tomorrowBest, timing) });
+    if (tomorrowCore) {
+      const fireAt = computeFireAt(tomorrowCore.startHour, "tomorrow", timing);
+      pending.push({ window: tomorrowCore, fireAt });
+      console.log(`[Notifications] daily_smart tomorrow: ${tomorrowCore.coreLabel} fireAt=${fireAt.toISOString()}`);
     }
   }
 
-  // ── 4. Schedule each notification ─────────────────────────
+  // ── 6. Schedule each ──────────────────────────────────────
   let scheduled = 0;
   for (const p of pending) {
-    // Skip already-past notifications
     if (p.fireAt <= now) {
-      console.log(`[Notifications] SKIP (past): ${p.type} fireAt=${p.fireAt.toISOString()}`);
+      console.log(`[Notifications] SKIP (past): fireAt=${p.fireAt.toISOString()}`);
+      continue;
+    }
+    // Quiet hours (07:00–22:00) filter — always active
+    const fireHour = p.fireAt.getHours();
+    if (fireHour < 7 || fireHour >= 22) {
+      console.log(`[Notifications] SKIP (quiet hours ${fireHour}h)`);
       continue;
     }
 
-    // Quiet hours (07:00–22:00) — only for AUTO mode
-    // User-picked times are always honoured
-    if (!p.isUserPicked) {
-      const fireHour = p.fireAt.getHours();
-      if (fireHour < 7 || fireHour >= 22) {
-        console.log(`[Notifications] SKIP (quiet hours ${fireHour}h): ${p.type}`);
-        continue;
-      }
-    }
-
-    const { title, body } = buildContent(p.type, p.window, device, lang);
-    console.log(`[Notifications] Scheduling ${p.type} at ${p.fireAt.toISOString()} — "${title}"`);
-
+    const { title, body } = buildContent(p.window, notifyMode, lang, surchargeCt);
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
-          title,
-          body,
-          sound:     "default",
-          // Android: reference the channel we created
+          title, body,
+          sound: true,
           ...(Platform.OS === "android" ? { channelId: CHANNEL_ID } : {}),
         },
-        trigger: { type: "date", date: p.fireAt } as any,
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: new Date(p.fireAt.getTime() - 120_000), // 2-min early to combat Doze delays
+          ...(Platform.OS === "android" ? { channelId: CHANNEL_ID } : {}),
+        },
       });
       scheduled++;
-      console.log(`[Notifications] ✓ Scheduled: ${p.type} at ${p.fireAt.toLocaleTimeString()}`);
+      console.log(`[Notifications] ✓ Scheduled: "${title}" at ${p.fireAt.toLocaleTimeString()}`);
     } catch (err) {
-      console.error(`[Notifications] ✗ FAILED to schedule ${p.type}:`, err);
+      console.error(`[Notifications] ✗ FAILED:`, err);
     }
   }
 
-  console.log(`[Notifications] Done: ${scheduled}/${pending.length} scheduled (mode=${userPickedFireAt ? "user-pick" : "auto"})`);
+  console.log(`[Notifications] Done: ${scheduled}/${pending.length} scheduled (mode=${notifyMode})`);
 }
