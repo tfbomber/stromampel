@@ -104,6 +104,8 @@ function AppInner() {
   const langRef = useRef<"de" | "en">("de");
   // notifyActiveRef: keeps notifyActive accessible inside stale AppState closure
   const notifyActiveRef = useRef<boolean>(false);
+  // Once-mode missed alarm: set when OS failed to deliver the alarm within 30 min
+  const [missedAlarmAt, setMissedAlarmAt] = useState<number | null>(null);
 
   const makeOnChange = (barId: string) => (hour: number | null) =>
     setActiveBarSel(hour !== null ? { barId, hour } : null);
@@ -157,6 +159,12 @@ function AppInner() {
         if (s.notifyMode === "once" && s.notifyFireAt && s.notifyFireAt <= Date.now()) {
           console.log(`[App] once-mode expired (${new Date(s.notifyFireAt).toISOString()}) — resetting notifyActive=false`);
           const { saveSettings } = await import("./lib/settings");
+          // If the alarm fired within 30 min, the OS likely missed it — show in-app banner
+          const ageMins = (Date.now() - s.notifyFireAt) / 60_000;
+          if (ageMins <= 30) {
+            setMissedAlarmAt(s.notifyFireAt);
+            console.log(`[App] once-mode: alarm was ${ageMins.toFixed(1)} min ago — showing missed banner`);
+          }
           await saveSettings({ notifyActive: false, notifyFireAt: undefined });
           // Also update React state so the bell icon resets immediately without app restart
           setSettings(prev => prev ? { ...prev, notifyActive: false, notifyFireAt: undefined } : prev);
@@ -225,6 +233,13 @@ function AppInner() {
     }, 15 * 60 * 1000);
     return () => clearInterval(timer);
   }, [load]);
+
+  // Auto-dismiss missed-alarm banner after 8 seconds
+  useEffect(() => {
+    if (!missedAlarmAt) return;
+    const t = setTimeout(() => setMissedAlarmAt(null), 8000);
+    return () => clearTimeout(t);
+  }, [missedAlarmAt]);
 
   // ── Settings updates ──────────────────────────────────────
   async function handleSettingsChange(patch: Partial<AppSettings>) {
@@ -393,6 +408,27 @@ function AppInner() {
                 ? "⚠️  Notifications blocked by system — tap to fix"
                 : "⚠️  Benachrichtigungen systemseitig gesperrt — antippen"}
             </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* ── Missed alarm banner ─────────────────────────────────── */}
+        {/* Shown when once-mode alarm expired within 30 min — OS likely missed it.  */}
+        {/* Auto-dismisses after 8 s; tapping ✕ also dismisses.                      */}
+        {missedAlarmAt !== null && (
+          <TouchableOpacity
+            style={styles.missedBanner}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+              setMissedAlarmAt(null);
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.missedBannerText}>
+              {lang === "en"
+                ? `⚡ ${new Date(missedAlarmAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} reminder may not have arrived · Now: ≈${current?.priceCt != null ? (current.priceCt + surchargeCt).toFixed(1).replace(".", ",") : "–"} ct`
+                : `⚡ Erinnerung ${new Date(missedAlarmAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr ggf. nicht zugestellt · Jetzt: ≈${current?.priceCt != null ? (current.priceCt + surchargeCt).toFixed(1).replace(".", ",") : "–"} ct`}
+            </Text>
+            <Text style={styles.missedBannerClose}>✕</Text>
           </TouchableOpacity>
         )}
 
@@ -765,6 +801,29 @@ const styles = StyleSheet.create({
     fontWeight: "600" as const,
     textAlign: "center" as const,
     lineHeight: 17,
+  },
+  // Missed alarm banner — soft amber, dismissable, auto-hides after 8 s
+  missedBanner: {
+    backgroundColor: "#fef3c7",
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "space-between" as const,
+    gap: 8,
+  },
+  missedBannerText: {
+    flex: 1,
+    color: "#92400e",
+    fontSize: 11,
+    fontWeight: "600" as const,
+    lineHeight: 16,
+  },
+  missedBannerClose: {
+    color: "#92400e",
+    fontSize: 13,
+    opacity: 0.7,
+    paddingLeft: 4,
   },
 });
 
