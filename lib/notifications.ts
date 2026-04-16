@@ -121,6 +121,7 @@ export async function scheduleAllUpcomingNotifications(
   lang:            "de" | "en",
   userPickedFireAt?: number,
   surchargeCt:     number = 23,
+  forceSchedule:   boolean = false, // true = explicit user activation; bypass imminent-alarm guard
 ): Promise<void> {
 
   // ── 1. Channel ────────────────────────────────────────────
@@ -137,15 +138,18 @@ export async function scheduleAllUpcomingNotifications(
   const nowMs  = now.getTime();
 
   // ── 3. Guard: skip cancel+reschedule if an alarm is imminent ─────────
-  if (notifyMode === "once" && userPickedFireAt) {
+  // IMPORTANT: forceSchedule=true bypasses this guard.
+  // This guard must NOT apply to explicit user activations — only to silent
+  // background load() calls where a pending alarm already exists.
+  if (!forceSchedule && notifyMode === "once" && userPickedFireAt) {
     const msUntil = userPickedFireAt - nowMs;
     if (msUntil >= -GUARD_MS && msUntil <= GUARD_MS) {
-      console.log(`[Notifications] GUARD(once): fire in ${Math.round(msUntil / 1000)}s — skip reschedule`);
+      console.log(`[Notifications] GUARD(once): fire in ${Math.round(msUntil / 1000)}s — skip reschedule (background only)`);
       return;
     }
   }
 
-  if (notifyMode === "daily_smart") {
+  if (!forceSchedule && notifyMode === "daily_smart") {
     // Check if any already-scheduled notification fires within the next 60 min.
     // If so, do NOT cancel it — that would destroy the imminent alarm that Doze
     // is already holding, and rescheduling would push it to tomorrow.
@@ -240,7 +244,10 @@ export async function scheduleAllUpcomingNotifications(
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: new Date(p.fireAt.getTime() - 120_000), // 2-min early to combat Doze delays
+          // Fire 2 min early to compensate for Doze delays.
+          // Clamped to now+3s so we never pass a past-dated trigger
+          // (expo-notifications silently drops past triggers on Android).
+          date: new Date(Math.max(Date.now() + 3000, p.fireAt.getTime() - 120_000)),
           ...(Platform.OS === "android" ? { channelId: CHANNEL_ID } : {}),
         },
       });

@@ -265,8 +265,9 @@ function AppInner() {
     });
     if (data) {
       scheduleAllUpcomingNotifications(
-        data, mode, timing, settings?.language ?? "de", fireAtEpoch, surchargeCt
-      ).catch(() => {});
+        data, mode, timing, settings?.language ?? "de", fireAtEpoch, surchargeCt,
+        true,  // forceSchedule: explicit user activation — bypass imminent-alarm Guard
+      ).catch((e) => console.error("[App] handleNotifyActivate scheduling failed:", e));
     }
     showBatteryOptimizationPromptOnce(settings?.language ?? "de");
   }
