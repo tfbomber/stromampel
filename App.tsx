@@ -8,6 +8,10 @@ import {
   RefreshControl, ActivityIndicator, TouchableOpacity,
   Alert, Linking, AppState, AppStateStatus, Platform,
 } from "react-native";
+import * as IntentLauncher from "expo-intent-launcher";
+import * as Haptics        from "expo-haptics";
+// Side-effect import: registers TaskManager task at module level (MUST be before AppRegistry)
+import { registerBackgroundTask } from "./lib/backgroundTask";
 import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
@@ -96,8 +100,12 @@ function AppInner() {
   // claimsRefreshKey removed — claim model replaced by SavingsScenarios
   // Shared timeline selection: only one bar active at a time
   const [activeBarSel, setActiveBarSel] = useState<{ barId: string; hour: number } | null>(null);
+  // OS-level notification permission state: null=not checked, true=ok, false=denied
+  const [hasOsNotifPerm, setHasOsNotifPerm] = useState<boolean | null>(null);
   // langRef: keeps current language accessible inside stale useCallback closures
   const langRef = useRef<"de" | "en">("de");
+  // notifyActiveRef: keeps notifyActive accessible inside stale AppState closure
+  const notifyActiveRef = useRef<boolean>(false);
 
   const makeOnChange = (barId: string) => (hour: number | null) =>
     setActiveBarSel(hour !== null ? { barId, hour } : null);
@@ -109,7 +117,29 @@ function AppInner() {
     ensureAndroidChannel().catch(e => console.warn("[App] Channel init failed:", e));
     // Diagnose Android 12+ exact alarm permission (logs error if missing)
     checkExactAlarmPermission().catch(e => console.warn("[App] Exact alarm check failed:", e));
+    // Register background task so notifications reschedule even when app is closed.
+    // stopOnTerminate=false in backgroundTask.ts keeps it alive after app kill.
+    registerBackgroundTask().catch(e => console.warn("[App] BG task registration failed:", e));
   }, []);
+
+  // ── Sync notifyActiveRef (fixes stale closure in AppState listener) ───
+  useEffect(() => {
+    notifyActiveRef.current = settings?.notifyActive ?? false;
+  }, [settings?.notifyActive]);
+
+  // ── Reactive OS permission check (runs after settings load from AsyncStorage) ─
+  // Bug-fix: using useEffect on notifyActive avoids the timing race where
+  // settings is still null during the initial render cycle.
+  // Bug-fix: only 'denied' triggers the banner; 'undetermined' does NOT.
+  useEffect(() => {
+    if (!settings?.notifyActive) {
+      setHasOsNotifPerm(null); // reset so next enable triggers a fresh check
+      return;
+    }
+    Notifications.getPermissionsAsync().then(p => {
+      setHasOsNotifPerm(p.status !== "denied");
+    });
+  }, [settings?.notifyActive]);
 
   // ── Fetch price data ──────────────────────────────────────
   const load = useCallback(async (silent = false) => {
@@ -118,6 +148,10 @@ function AppInner() {
     try {
       const d = await fetchAppData();
       setData(d);
+      // Haptic: confirm successful data load on pull-to-refresh (not on silent bg refresh)
+      if (!silent) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      }
 
       // Auto-schedule notifications for ALL upcoming cheap windows.
       // Fires even when app is closed. Re-schedules on every load
@@ -171,11 +205,19 @@ function AppInner() {
         // it would wipe background-delivered notifications from the tray
         // before the user has a chance to see them.
         load(true);
+        // Re-check OS notification permission so banner appears/disappears instantly.
+        // Uses notifyActiveRef to avoid stale closure over settings state.
+        if (notifyActiveRef.current) {
+          Notifications.getPermissionsAsync().then(p => {
+            setHasOsNotifPerm(p.status !== "denied");
+          });
+        }
       }
       appState.current = nextState;
     });
     return () => sub.remove();
   }, [load]);
+
 
   // Auto-refresh data every 15 minutes (foreground only via AppState guard above).
   // Notification reschedule is protected by GUARD_MS window in notifications.ts.
@@ -202,6 +244,8 @@ function AppInner() {
 
   // ── Notify activation ─────────────────────────────────────────
   async function handleNotifyActivate(mode: NotifyMode, timing: Timing, fireAtEpoch?: number) {
+    // Haptic: celebrate successful notification activation
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     await handleSettingsChange({
       notifyActive: true,
       notifyMode:   mode,
@@ -232,13 +276,21 @@ function AppInner() {
         Alert.alert(
           lang === "en" ? "Improve notification timing" : "Pünktlichere Benachrichtigungen",
           lang === "en"
-            ? "Android's battery saver can delay alerts by 10–20 min.\n\nTo fix this: Settings → Battery → Battery Optimisation → find Strom Ampel → select \'Don\'t Optimise\'"
-            : "Androids Akkusparmodus kann Erinnerungen um 10–20 Min. verzögern.\n\nSo beheben: Einstellungen → Akku → Akkuoptimierung → Strom Ampel auswählen → Nicht optimieren",
+            ? "Android's battery saver can delay alerts by 10–20 min.\n\nTap \"Disable Optimisation\" to fix this — it takes 2 seconds."
+            : "Androids Akkusparmodus kann Erinnerungen um 10–20 Min. verzögern.\n\nTippe auf \"Optimierung deaktivieren\" – dauert 2 Sekunden.",
           [
             { text: lang === "en" ? "Later" : "Später", style: "cancel" },
             {
-              text: lang === "en" ? "Open Settings" : "Zu den Einstellungen",
-              onPress: () => Linking.openSettings(),
+              text: lang === "en" ? "Disable Optimisation" : "Optimierung deaktivieren",
+              onPress: () => {
+                // expo-intent-launcher correctly passes packageName as a data URI
+                // (setData), which is required by ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS.
+                // Falls back to generic settings on devices that reject the intent.
+                IntentLauncher.startActivityAsync(
+                  "android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+                  { data: "package:de.stromampel.app" }
+                ).catch(() => Linking.openSettings());
+              },
             },
           ]
         );
@@ -326,6 +378,28 @@ function AppInner() {
       <SafeAreaView style={[styles.root, { backgroundColor: T.bg }]}>
         {/* StatusBar style: dark icons on light bg, light icons on dark bg */}
         <StatusBar style={settings?.theme === "dark" ? "light" : "dark"} />
+
+        {/* ── Permission Banner ───────────────────────────────────── */}
+        {/* Pinned above ScrollView — always visible, does NOT scroll away.  */}
+        {/* Only shown when: (1) user enabled notifications in-app AND        */}
+        {/* (2) OS explicitly denied the notification permission.              */}
+        {settings?.notifyActive && hasOsNotifPerm === false && (
+          <TouchableOpacity
+            style={styles.permissionBanner}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              Linking.openSettings();
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.permissionBannerText}>
+              {lang === "en"
+                ? "⚠️  Notifications blocked by system — tap to fix"
+                : "⚠️  Benachrichtigungen systemseitig gesperrt — antippen"}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         <ScrollView
           contentContainerStyle={styles.scroll}
           onScrollBeginDrag={() => setActiveBarSel(null)}
@@ -536,7 +610,10 @@ function AppInner() {
                   <Pressable onPress={() => setNotifyOpen(true)} hitSlop={8}>
                     <Text style={[styles.notifyEdit, { color: T.sub }]}>{t("notifyChange")}</Text>
                   </Pressable>
-                  <Pressable onPress={() => handleSettingsChange({ notifyActive: false })} hitSlop={8}>
+                  <Pressable onPress={() => {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                    handleSettingsChange({ notifyActive: false });
+                  }} hitSlop={8}>
                     <Text style={styles.notifyDisable}>{t("notifyOff")}</Text>
                   </Pressable>
                 </>
@@ -676,4 +753,19 @@ const styles = StyleSheet.create({
   fixedNoticeTitle: { fontSize: 12, fontWeight: "600" },
   fixedNoticeSub:   { fontSize: 10, marginTop: 2, lineHeight: 14, opacity: 0.7 },
   fixedNoticeFomo:  { fontSize: 10, marginTop: 3, fontWeight: "600", lineHeight: 14 },
+  // Permission banner — pinned above ScrollView, amber warning style
+  permissionBanner: {
+    backgroundColor: "#b45309",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: "center" as const,
+  },
+  permissionBannerText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600" as const,
+    textAlign: "center" as const,
+    lineHeight: 17,
+  },
 });
+
