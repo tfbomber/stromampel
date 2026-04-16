@@ -419,7 +419,10 @@ function AppInner() {
               >{t("appSub")}</Text>
             </View>
             <View style={styles.headerRight}>
-              <Pressable onPress={() => setSettingsOpen(true)} hitSlop={12} style={styles.gearBtn}>
+              <Pressable onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                setSettingsOpen(true);
+              }} hitSlop={12} style={styles.gearBtn}>
                 <Text style={styles.gearIcon}>⚙️</Text>
               </Pressable>
             </View>

@@ -6,24 +6,13 @@
 import React, { useEffect, useRef } from "react";
 import {
   View, Text, Pressable, StyleSheet, Modal,
-  Animated, TouchableOpacity,
+  Animated, TouchableOpacity, ScrollView,
 } from "react-native";
 import Constants from "expo-constants";
+import * as Haptics from "expo-haptics";
 import type { TariffType, AppSettings, Theme, Language } from "../lib/settings";
 import { useTheme } from "../lib/theme";
-import { useI18n, type TranslationKey } from "../lib/i18n";
-
-type AnbieterOption =
-  | { value: string; label: string }
-  | { value: string; labelKey: TranslationKey };
-
-const ANBIETER_OPTIONS: AnbieterOption[] = [
-  { value: "tibber",   label: "Tibber" },
-  { value: "awattar",  label: "aWATTar" },
-  { value: "ostrom",   label: "Ostrom" },
-  { value: "eprimo",   label: "eprimo" },
-  { value: "other",    labelKey: "otherProvider" },
-];
+import { useI18n } from "../lib/i18n";
 
 const LANGUAGE_OPTIONS: { value: Language; flag: string; label: string }[] = [
   { value: "de", flag: "🇩🇪", label: "Deutsch" },
@@ -60,7 +49,12 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
           <View style={[styles.handle, { backgroundColor: T.border }]} />
         </View>
 
-        <View style={styles.content}>
+        <ScrollView
+          style={styles.scrollArea}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
           {/* Header */}
           <View style={styles.headerRow}>
             <Text style={[styles.title, { color: T.text }]}>{t("settings")}</Text>
@@ -81,7 +75,10 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
                     styles.compactCard,
                     { borderColor: selected ? GREEN : T.inputBorder, backgroundColor: T.bg },
                   ]}
-                  onPress={() => onChange({ tariffType: tariff, anbieter: tariff === "fixed" ? "" : settings.anbieter })}
+                  onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  onChange({ tariffType: tariff });
+                }}
                 >
                   <Text style={styles.compactEmoji}>{tariff === "dynamic" ? "⚡" : "🔒"}</Text>
                   <Text style={[styles.compactName, { color: selected ? GREEN : T.sub }]}>
@@ -98,35 +95,6 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
             <Text style={[styles.tariffNote, { color: T.sub }]}>{t("fixedNote")}</Text>
           )}
 
-          {/* ── Anbieter (dynamic only) ─────────────────── */}
-          {settings.tariffType === "dynamic" && (
-            <>
-              <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>{t("myProvider")}</Text>
-              <View style={styles.pills}>
-                {ANBIETER_OPTIONS.map((a) => {
-                  const selected = settings.anbieter === a.value;
-                  const label = "labelKey" in a ? t(a.labelKey) : a.label;
-                  return (
-                    <Pressable
-                      key={a.value}
-                      style={[
-                        styles.pill,
-                        { borderColor: selected ? GREEN : T.inputBorder,
-                          backgroundColor: selected ? "#f0fdf4" : T.bg },
-                      ]}
-                      onPress={() => onChange({ anbieter: selected ? "" : a.value })}
-                    >
-                      <Text style={[styles.pillText, { color: selected ? "#15803d" : T.sub },
-                        selected && { fontWeight: "600" }]}>
-                        {label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </>
-          )}
-
           {/* ── Language ────────────────────────────────── */}
           <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>{t("language")}</Text>
           <View style={styles.tariffRow}>
@@ -139,7 +107,10 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
                     styles.compactCard,
                     { borderColor: selected ? GREEN : T.inputBorder, backgroundColor: T.bg },
                   ]}
-                  onPress={() => onChange({ language: lang.value })}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                    onChange({ language: lang.value });
+                  }}
                 >
                   <Text style={styles.compactEmoji}>{lang.flag}</Text>
                   <Text style={[styles.compactName, { color: selected ? GREEN : T.sub }]}>
@@ -162,7 +133,10 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
                     styles.compactCard,
                     { borderColor: selected ? GREEN : T.inputBorder, backgroundColor: T.bg },
                   ]}
-                  onPress={() => onChange({ theme: thm })}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                    onChange({ theme: thm });
+                  }}
                 >
                   <Text style={styles.compactEmoji}>{thm === "light" ? "☀️" : "🌙"}</Text>
                   <Text style={[styles.compactName, { color: selected ? GREEN : T.sub }]}>
@@ -173,11 +147,77 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
             })}
           </View>
 
+          {/* ── Troubleshooting ─────────────────────────────── */}
+          <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>
+            {settings.language === "en" ? "TROUBLESHOOTING" : "FEHLERBEHEBUNG"}
+          </Text>
+          <Pressable
+            style={[styles.troubleCard, { borderColor: T.inputBorder, backgroundColor: T.bg }]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+              import("react-native").then(({ Alert, Linking }) => {
+                Alert.alert(
+                  settings.language === "en" ? "Notification Fixes" : "Benachrichtigungs-Hilfe",
+                  settings.language === "en"
+                    ? "• Android 14+: Please ensure \"Alarms & reminders\" (Exact Alarms) permission is granted.\n\n• Xiaomi/Huawei/Samsung: If the app is swiped away from Recents, alarms may be killed. Lock the app in Recents or enable \"AutoStart\" in phone settings."
+                    : "• Android 14+: Bitte überprüfe in den Einstellungen, ob die Berechtigung für \"Wecker und Erinnerungen\" erteilt ist.\n\n• Xiaomi/Huawei/Samsung: Wenn Du die App wegwischst, werden Alarme oft blockiert. Bitte die App im Task-Manager sperren oder \"AutoStart\" aktivieren.",
+                  [
+                    { text: settings.language === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
+                    { text: settings.language === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() }
+                  ]
+                );
+              });
+            }}
+          >
+            <Text style={styles.troubleEmoji}>🛠️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.troubleTitle, { color: T.text }]}>
+                {settings.language === "en" ? "Fix Notifications" : "Benachrichtigungen reparieren"}
+              </Text>
+              <Text style={[styles.troubleSub, { color: T.sub }]}>
+                {settings.language === "en"
+                  ? "Not receiving alerts? Check permissions & battery."
+                  : "Keine Erinnerungen? Rechte & Akku-Optionen prüfen."}
+              </Text>
+            </View>
+          </Pressable>
+
+          {/* ── Netzentgelt / Surcharge ─────────────────────── */}
+          <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>
+            {settings.language === "en" ? "GRID FEE ESTIMATE" : "NETZENTGELT"}
+          </Text>
+          <View style={[styles.surchargeBox, { borderColor: T.inputBorder, backgroundColor: T.bg }]}>
+            <Text style={[styles.surchargeSub, { color: T.sub }]}>
+              {settings.language === "en"
+                ? `Added to spot price. Default 23 ct covers most German regions.`
+                : `Zum Spotpreis addiert. Standard 23 ct gilt für die meisten deutschen Regionen.`}
+            </Text>
+            <View style={styles.surchargeRow}>
+              {[18, 20, 23, 25, 28].map(v => {
+                const sel = (settings.surchargeCt ?? 23) === v;
+                return (
+                  <Pressable
+                    key={v}
+                    style={[styles.surchargeChip,
+                      { borderColor: sel ? GREEN : T.inputBorder,
+                        backgroundColor: sel ? "#f0fdf4" : T.bg }]}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                      onChange({ surchargeCt: v });
+                    }}
+                  >
+                    <Text style={[styles.surchargeChipText, { color: sel ? "#15803d" : T.sub }]}>{v} ct</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
           <Text style={[styles.footerNote, { color: T.footer }]}>{t("savedLocal")}</Text>
           <Text style={[styles.versionNote, { color: T.footer }]}>
             Version {Constants.expoConfig?.version ?? "1.0.0"}
           </Text>
-        </View>
+        </ScrollView>
       </Animated.View>
     </Modal>
   );
@@ -187,10 +227,12 @@ const styles = StyleSheet.create({
   backdrop:    { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.4)" },
   sheet: {
     position: "absolute", bottom: 0, left: 0, right: 0,
+    maxHeight: "85%",
     borderTopLeftRadius: 20, borderTopRightRadius: 20,
     shadowColor: "#000", shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.15, shadowRadius: 12, elevation: 20,
   },
+  scrollArea: { flexShrink: 1 },
   handleWrap:  { alignItems: "center", paddingTop: 12, paddingBottom: 4 },
   handle:      { width: 40, height: 4, borderRadius: 2 },
   content:     { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 8 },
@@ -213,4 +255,22 @@ const styles = StyleSheet.create({
   pillText:    { fontSize: 13 },
   footerNote:  { fontSize: 11, textAlign: "center", marginTop: 4 },
   versionNote: { fontSize: 10, textAlign: "center", marginTop: 2, opacity: 0.6 },
+  troubleCard: {
+    flexDirection: "row", alignItems: "center", gap: 12, padding: 12,
+    borderRadius: 12, borderWidth: 1.5, marginBottom: 16,
+  },
+  troubleEmoji: { fontSize: 22 },
+  troubleTitle: { fontSize: 13, fontWeight: "600", marginBottom: 2 },
+  troubleSub:   { fontSize: 11, lineHeight: 15 },
+  // Surcharge / Netzentgelt section
+  surchargeBox: {
+    borderWidth: 1.5, borderRadius: 12, padding: 12, marginBottom: 14,
+  },
+  surchargeSub:      { fontSize: 11, lineHeight: 16, marginBottom: 10 },
+  surchargeRow:      { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  surchargeChip: {
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1.5,
+  },
+  surchargeChipText: { fontSize: 13, fontWeight: "600" },
 });
