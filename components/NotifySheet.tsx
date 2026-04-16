@@ -86,8 +86,11 @@ export default function NotifySheet({
 
   // ── "daily_smart" preview: next coreLabel ──
   const smartWindow  = todayCheapestWindow ?? tomorrowCheapestWindow ?? null;
-  const smartLabel   = smartWindow
-    ? (smartWindow.coreLabel ?? smartWindow.label)
+  const smartCoreLabel = smartWindow ? (smartWindow.coreLabel ?? smartWindow.label) : null;
+  const smartLabel   = smartCoreLabel
+    ? (smartWindow!.date === "tomorrow"
+        ? (lang === "en" ? `Tomorrow · ${smartCoreLabel}` : `Morgen · ${smartCoreLabel}`)
+        : smartCoreLabel)
     : (lang === "en" ? "cheapest window each day" : "günstigste Phase täglich");
 
   const barSlots  = selectedDay === "today" ? todaySlots : (tomorrowSlots ?? []);

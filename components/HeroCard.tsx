@@ -58,9 +58,12 @@ function buildHintParts(
     const label  = nextCheap.coreLabel;
 
     if (status === "GREEN") {
+      const dayPrefix = nextCheap.date === "tomorrow"
+        ? (lang === "en" ? "Tomorrow · " : "Morgen · ")
+        : "";
       return {
         prefix: lang === "en" ? "Best window: " : "Günstigste Phase: ",
-        time:   label,
+        time:   `${dayPrefix}${label}`,
         mid:    " · ø ",
         price:  ct,
       };
