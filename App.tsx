@@ -158,7 +158,8 @@ function AppInner() {
           console.log(`[App] once-mode expired (${new Date(s.notifyFireAt).toISOString()}) — resetting notifyActive=false`);
           const { saveSettings } = await import("./lib/settings");
           await saveSettings({ notifyActive: false, notifyFireAt: undefined });
-          // Don't schedule
+          // Also update React state so the bell icon resets immediately without app restart
+          setSettings(prev => prev ? { ...prev, notifyActive: false, notifyFireAt: undefined } : prev);
         } else {
           const futureFireAt = s.notifyMode === "once" && s.notifyFireAt && s.notifyFireAt > Date.now()
             ? s.notifyFireAt : undefined;

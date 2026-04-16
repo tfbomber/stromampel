@@ -110,25 +110,9 @@ export default function NotifySheet({
         onActivate("daily_smart", timing);
       }
       onClose();
-      // ── Prompt battery optimization exemption ─────────────────────
-      // Android Doze mode blocks exact alarms in background unless the app
-      // is whitelisted from battery optimization. This one-time prompt is
-      // the most effective fix without requiring a background service.
-      setTimeout(() => {
-        Alert.alert(
-          lang === "en" ? "🔔 Reliable notifications" : "🔔 Zuverlässige Benachrichtigungen",
-          lang === "en"
-            ? "To ensure alerts arrive on time:\n\nSettings → Apps → Strom Ampel → Battery → Unrestricted"
-            : "Damit Erinnerungen pünktlich ankommen:\n\nEinstellungen → Apps → Strom Ampel → Akku → Keine Einschränkungen",
-          [
-            { text: lang === "en" ? "Later" : "Später", style: "cancel" },
-            {
-              text: lang === "en" ? "Open Settings" : "Einstellungen öffnen",
-              onPress: () => Linking.openSettings(),
-            },
-          ]
-        );
-      }, 500); // small delay so sheet has time to close
+      // Battery optimization guidance is handled by App.tsx
+      // showBatteryOptimizationPromptOnce (fires once via AsyncStorage guard,
+      // uses IntentLauncher to open the correct system dialog).
     };
 
     if (existing.status === "granted") { await proceed(); return; }
