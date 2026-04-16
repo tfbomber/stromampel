@@ -10,8 +10,6 @@ import {
 } from "react-native";
 import * as IntentLauncher from "expo-intent-launcher";
 import * as Haptics        from "expo-haptics";
-// Side-effect import: registers TaskManager task at module level (MUST be before AppRegistry)
-import { registerBackgroundTask } from "./lib/backgroundTask";
 import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
@@ -117,9 +115,6 @@ function AppInner() {
     ensureAndroidChannel().catch(e => console.warn("[App] Channel init failed:", e));
     // Diagnose Android 12+ exact alarm permission (logs error if missing)
     checkExactAlarmPermission().catch(e => console.warn("[App] Exact alarm check failed:", e));
-    // Register background task so notifications reschedule even when app is closed.
-    // stopOnTerminate=false in backgroundTask.ts keeps it alive after app kill.
-    registerBackgroundTask().catch(e => console.warn("[App] BG task registration failed:", e));
   }, []);
 
   // ── Sync notifyActiveRef (fixes stale closure in AppState listener) ───
