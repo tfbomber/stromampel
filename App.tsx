@@ -104,8 +104,7 @@ function AppInner() {
   const langRef = useRef<"de" | "en">("de");
   // notifyActiveRef: keeps notifyActive accessible inside stale AppState closure
   const notifyActiveRef = useRef<boolean>(false);
-  // Once-mode missed alarm: set when OS failed to deliver the alarm within 30 min
-  const [missedAlarmAt, setMissedAlarmAt] = useState<number | null>(null);
+
 
   const makeOnChange = (barId: string) => (hour: number | null) =>
     setActiveBarSel(hour !== null ? { barId, hour } : null);
@@ -234,12 +233,7 @@ function AppInner() {
     return () => clearInterval(timer);
   }, [load]);
 
-  // Auto-dismiss missed-alarm banner after 8 seconds
-  useEffect(() => {
-    if (!missedAlarmAt) return;
-    const t = setTimeout(() => setMissedAlarmAt(null), 8000);
-    return () => clearTimeout(t);
-  }, [missedAlarmAt]);
+
 
   // ── Settings updates ──────────────────────────────────────
   async function handleSettingsChange(patch: Partial<AppSettings>) {
@@ -412,26 +406,7 @@ function AppInner() {
           </TouchableOpacity>
         )}
 
-        {/* ── Missed alarm banner ─────────────────────────────────── */}
-        {/* Shown when once-mode alarm expired within 30 min — OS likely missed it.  */}
-        {/* Auto-dismisses after 8 s; tapping ✕ also dismisses.                      */}
-        {missedAlarmAt !== null && (
-          <TouchableOpacity
-            style={styles.missedBanner}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-              setMissedAlarmAt(null);
-            }}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.missedBannerText}>
-              {lang === "en"
-                ? `⚡ ${new Date(missedAlarmAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} reminder may not have arrived · Now: ≈${current?.priceCt != null ? (current.priceCt + surchargeCt).toFixed(1).replace(".", ",") : "–"} ct`
-                : `⚡ Erinnerung ${new Date(missedAlarmAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr ggf. nicht zugestellt · Jetzt: ≈${current?.priceCt != null ? (current.priceCt + surchargeCt).toFixed(1).replace(".", ",") : "–"} ct`}
-            </Text>
-            <Text style={styles.missedBannerClose}>✕</Text>
-          </TouchableOpacity>
-        )}
+
 
         <ScrollView
           contentContainerStyle={styles.scroll}
@@ -716,8 +691,12 @@ function AppInner() {
           onActivate={handleNotifyActivate}
           todaySlots={today?.slots ?? []}
           todayCheapestWindow={today?.cheapestWindow ?? null}
+          todayNextCheapWindow={today?.nextCheapWindow ?? null}
           tomorrowSlots={tomorrow?.slots ?? null}
           tomorrowCheapestWindow={tomorrow?.cheapestWindow ?? null}
+          initialMode={settings?.notifyMode}
+          initialTiming={settings?.timing}
+          surchargeCt={surchargeCt}
         />
 
         <FeedbackSheet
@@ -803,28 +782,6 @@ const styles = StyleSheet.create({
     textAlign: "center" as const,
     lineHeight: 17,
   },
-  // Missed alarm banner — soft amber, dismissable, auto-hides after 8 s
-  missedBanner: {
-    backgroundColor: "#fef3c7",
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    justifyContent: "space-between" as const,
-    gap: 8,
-  },
-  missedBannerText: {
-    flex: 1,
-    color: "#92400e",
-    fontSize: 11,
-    fontWeight: "600" as const,
-    lineHeight: 16,
-  },
-  missedBannerClose: {
-    color: "#92400e",
-    fontSize: 13,
-    opacity: 0.7,
-    paddingLeft: 4,
-  },
+
 });
 

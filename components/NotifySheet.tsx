@@ -1,7 +1,16 @@
 // ============================================================
-// NotifySheet — v4
+// NotifySheet — v5
 // Mode toggle (Once / Daily Smart) + timing + price bar
 // Device selection removed; single-step flow.
+//
+// v5 fixes:
+//   - Bug 1: surchargeCt now passed to TimelineBar (bar heights/colors now
+//             match the home screen — previously rendered raw spot prices)
+//   - Bug 2: todayNextCheapWindow used as primary source for default hour
+//             so "Once" mode doesn't open with a past-hour selection
+//   - UX:    smartWindow preview uses nextCheapWindow first (future-anchored)
+//   - UX:    fireLabel now prepends "Heute / Morgen" when timing offset
+//             crosses a day boundary (cross-midnight disambiguation)
 // ============================================================
 
 import React, { useEffect, useRef, useState } from "react";
@@ -23,16 +32,26 @@ interface Props {
   onActivate: (mode: NotifyMode, timing: Timing, fireAtEpoch?: number) => void;
   todaySlots:             HourSlot[];
   todayCheapestWindow:    CheapWindow | null;
+  /** Next upcoming cheap window today (future-anchored, may be null if none remain). */
+  todayNextCheapWindow:   CheapWindow | null;
   tomorrowSlots:          HourSlot[] | null;
   tomorrowCheapestWindow: CheapWindow | null;
+  /** Pre-populate mode from last saved settings (avoids always resetting to daily_smart). */
+  initialMode?:   NotifyMode;
+  /** Pre-populate timing from last saved settings. */
+  initialTiming?: Timing;
+  /** Flat surcharge (ct/kWh) added to spot — must match home screen for visual consistency. */
+  surchargeCt?: number;
 }
 
 function pad2(n: number) { return n.toString().padStart(2, "0"); }
 
 export default function NotifySheet({
   visible, onClose, onActivate,
-  todaySlots, todayCheapestWindow,
+  todaySlots, todayCheapestWindow, todayNextCheapWindow,
   tomorrowSlots, tomorrowCheapestWindow,
+  initialMode, initialTiming,
+  surchargeCt = 0,
 }: Props) {
   const T = useTheme();
   const { lang } = useI18n();
@@ -49,16 +68,23 @@ export default function NotifySheet({
   const tomorrowFull = (tomorrowSlots ?? []).filter(s => s.priceCt !== null);
   const hasTomorrow  = tomorrowFull.length > 0;
 
-  const todayCheapHour    = todayCheapestWindow?.startHour ?? todayFuture[0]?.hour ?? (nowHour + 1);
+  // Bug fix: prefer next upcoming cheap window so default is never a past hour.
+  // Priority: future-anchored nextCheapWindow → global cheapestWindow (fallback) → first future slot → nowHour+1
+  const todayCheapHour =
+    todayNextCheapWindow?.startHour ??
+    todayCheapestWindow?.startHour ??
+    todayFuture[0]?.hour ??
+    (nowHour + 1);
   const tomorrowCheapHour = tomorrowCheapestWindow?.startHour ?? tomorrowFull[0]?.hour ?? 10;
 
   // Reset state when sheet opens
   useEffect(() => {
     if (visible) {
-      setMode("daily_smart");
+      // Restore last used mode/timing — fall back to sane defaults for new users
+      setMode(initialMode ?? "daily_smart");
       setSelectedDay("today");
       setSelectedHour(todayCheapHour);
-      setTiming(30);
+      setTiming(initialTiming ?? 30);
     }
   }, [visible]);
 
@@ -82,10 +108,20 @@ export default function NotifySheet({
     return new Date(d.getTime() - timing * 60_000);
   })();
   const fireAtValid = fireAtDate > new Date();
-  const fireLabel   = `${pad2(fireAtDate.getHours())}:${pad2(fireAtDate.getMinutes())} Uhr`;
 
-  // ── "daily_smart" preview: next coreLabel ──
-  const smartWindow  = todayCheapestWindow ?? tomorrowCheapestWindow ?? null;
+  // Cross-midnight disambiguation: prepend "Heute" / "Morgen" if alarm day differs
+  // from the selected day context (e.g. "Tomorrow 00:00" - 60min = "Today 23:00").
+  const fireAtDay  = fireAtDate.toDateString();
+  const todayStr   = new Date().toDateString();
+  const tmrStr     = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toDateString(); })();
+  const fireDayLabel =
+    fireAtDay === todayStr ? (lang === "en" ? "Today " : "Heute ") :
+    fireAtDay === tmrStr   ? (lang === "en" ? "Tomorrow " : "Morgen ") : "";
+  const fireLabel = `${fireDayLabel}${pad2(fireAtDate.getHours())}:${pad2(fireAtDate.getMinutes())} Uhr`;
+
+  // ── "daily_smart" preview: prefer upcoming (future-anchored) window ──
+  // Priority: future nextCheapWindow → global cheapestWindow → tomorrowCheapestWindow
+  const smartWindow  = todayNextCheapWindow ?? todayCheapestWindow ?? tomorrowCheapestWindow ?? null;
   const smartCoreLabel = smartWindow ? (smartWindow.coreLabel ?? smartWindow.label) : null;
   const smartLabel   = smartCoreLabel
     ? (smartWindow!.date === "tomorrow"
@@ -221,7 +257,7 @@ export default function NotifySheet({
             <View style={[styles.smartPreview, { backgroundColor: "#f0fdf4" }]}>
               <Text style={[styles.smartPreviewText, { color: "#15803d" }]}>
                 {lang === "en"
-                  ? `🔄 Tomorrow: fires at the start of the cheapest window — e.g. ${smartLabel}`
+                  ? `🔄 Daily: fires at the start of the cheapest window — e.g. ${smartLabel}`
                   : `🔄 Täglich: Erinnerung zur günstigsten Phase – z. B. ${smartLabel}`}
               </Text>
             </View>
@@ -266,6 +302,7 @@ export default function NotifySheet({
                     isToday={selectedDay === "today"}
                     activeHour={selectedHour}
                     onActiveHourChange={(h) => { if (h !== null) setSelectedHour(h); }}
+                    surchargeCt={surchargeCt}
                   />
                 ) : (
                   <Text style={[styles.noSlots, { color: T.sub }]}>
