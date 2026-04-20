@@ -68,14 +68,14 @@ export default function NotifySheet({
   const tomorrowFull = (tomorrowSlots ?? []).filter(s => s.priceCt !== null);
   const hasTomorrow  = tomorrowFull.length > 0;
 
-  // Bug fix: prefer next upcoming cheap window so default is never a past hour.
+  // Default hour = coreStartHour (best 3h block shown in HeroCard), not full window startHour.
   // Priority: future-anchored nextCheapWindow → global cheapestWindow (fallback) → first future slot → nowHour+1
   const todayCheapHour =
-    todayNextCheapWindow?.startHour ??
-    todayCheapestWindow?.startHour ??
+    todayNextCheapWindow?.coreStartHour ??
+    todayCheapestWindow?.coreStartHour ??
     todayFuture[0]?.hour ??
     (nowHour + 1);
-  const tomorrowCheapHour = tomorrowCheapestWindow?.startHour ?? tomorrowFull[0]?.hour ?? 10;
+  const tomorrowCheapHour = tomorrowCheapestWindow?.coreStartHour ?? tomorrowFull[0]?.hour ?? 10;
 
   // Reset state when sheet opens
   useEffect(() => {

@@ -100,8 +100,6 @@ function AppInner() {
   const [activeBarSel, setActiveBarSel] = useState<{ barId: string; hour: number } | null>(null);
   // OS-level notification permission state: null=not checked, true=ok, false=denied
   const [hasOsNotifPerm, setHasOsNotifPerm] = useState<boolean | null>(null);
-  // missedAlarmAt: set when a once-mode alarm fires but OS may not have delivered it (within 30 min)
-  const [missedAlarmAt, setMissedAlarmAt] = useState<number | null>(null);
   // langRef: keeps current language accessible inside stale useCallback closures
   const langRef = useRef<"de" | "en">("de");
   // notifyActiveRef: keeps notifyActive accessible inside stale AppState closure
@@ -124,6 +122,27 @@ function AppInner() {
   useEffect(() => {
     notifyActiveRef.current = settings?.notifyActive ?? false;
   }, [settings?.notifyActive]);
+
+  // ── Immediate once-mode reset when notification fires ─────────────────
+  // Handles two scenarios:
+  //   1. User taps the notification (app opens from tray) — ResponseReceived
+  //   2. Notification arrives while app is foregrounded  — NotificationReceived
+  // Both immediately reset notifyActive so the bell icon clears without waiting
+  // for the next load() cycle (which can be up to 15 min later).
+  useEffect(() => {
+    async function resetIfOnceExpired() {
+      const { loadSettings: ls, saveSettings: ss } = await import("./lib/settings");
+      const s = await ls();
+      if (s.notifyMode === "once" && s.notifyActive && s.notifyFireAt && s.notifyFireAt <= Date.now()) {
+        console.log("[App] once-mode: notification event detected — immediate reset");
+        await ss({ notifyActive: false, notifyFireAt: undefined });
+        setSettings(prev => prev ? { ...prev, notifyActive: false, notifyFireAt: undefined } : prev);
+      }
+    }
+    const responseSub = Notifications.addNotificationResponseReceivedListener(() => resetIfOnceExpired());
+    const receivedSub = Notifications.addNotificationReceivedListener(() => resetIfOnceExpired());
+    return () => { responseSub.remove(); receivedSub.remove(); };
+  }, []);
 
   // ── Reactive OS permission check (runs after settings load from AsyncStorage) ─
   // Bug-fix: using useEffect on notifyActive avoids the timing race where
@@ -160,14 +179,8 @@ function AppInner() {
         if (s.notifyMode === "once" && s.notifyFireAt && s.notifyFireAt <= Date.now()) {
           console.log(`[App] once-mode expired (${new Date(s.notifyFireAt).toISOString()}) — resetting notifyActive=false`);
           const { saveSettings } = await import("./lib/settings");
-          // If the alarm fired within 30 min, the OS likely missed it — show in-app banner
-          const ageMins = (Date.now() - s.notifyFireAt) / 60_000;
-          if (ageMins <= 30) {
-            setMissedAlarmAt(s.notifyFireAt);
-            console.log(`[App] once-mode: alarm was ${ageMins.toFixed(1)} min ago — showing missed banner`);
-          }
           await saveSettings({ notifyActive: false, notifyFireAt: undefined });
-          // Also update React state so the bell icon resets immediately without app restart
+          // Update React state so the bell icon resets immediately without app restart
           setSettings(prev => prev ? { ...prev, notifyActive: false, notifyFireAt: undefined } : prev);
         } else {
           const futureFireAt = s.notifyMode === "once" && s.notifyFireAt && s.notifyFireAt > Date.now()
