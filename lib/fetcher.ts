@@ -35,8 +35,15 @@ function buildSlots(entries: AwattarEntry[], date: Date): HourSlot[] {
     }
   });
 
-  const values = Object.values(prices).filter((v) => v !== undefined);
-  const avg = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+  // Use only remaining hours (from nowHour onward for today, all for tomorrow)
+  // as the avg baseline — matching findNextCheapWindow's baseline exactly.
+  const fromHour = isToday ? nowHour : 0;
+  const futureValues = Object.entries(prices)
+    .filter(([h]) => Number(h) >= fromHour)
+    .map(([, v]) => v);
+  const avg = futureValues.length > 0
+    ? futureValues.reduce((a, b) => a + b, 0) / futureValues.length
+    : 0;
 
   return Array.from({ length: 24 }, (_, h) => {
     const priceCt = prices[h] ?? null;

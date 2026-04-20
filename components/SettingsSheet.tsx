@@ -28,7 +28,7 @@ interface Props {
 
 export default function SettingsSheet({ visible, settings, onClose, onChange }: Props) {
   const T = useTheme();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const slideAnim = useRef(new Animated.Value(300)).current;
 
   useEffect(() => {
@@ -149,7 +149,7 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
 
           {/* ── Troubleshooting ─────────────────────────────── */}
           <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>
-            {settings.language === "en" ? "TROUBLESHOOTING" : "FEHLERBEHEBUNG"}
+            {lang === "en" ? "TROUBLESHOOTING" : "FEHLERBEHEBUNG"}
           </Text>
           <Pressable
             style={[styles.troubleCard, { borderColor: T.inputBorder, backgroundColor: T.bg }]}
@@ -157,13 +157,13 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
               import("react-native").then(({ Alert, Linking }) => {
                 Alert.alert(
-                  settings.language === "en" ? "Notification Fixes" : "Benachrichtigungs-Hilfe",
-                  settings.language === "en"
+                  lang === "en" ? "Notification Fixes" : "Benachrichtigungs-Hilfe",
+                  lang === "en"
                     ? "• Android 14+: Please ensure \"Alarms & reminders\" (Exact Alarms) permission is granted.\n\n• Xiaomi/Huawei/Samsung: If the app is swiped away from Recents, alarms may be killed. Lock the app in Recents or enable \"AutoStart\" in phone settings."
                     : "• Android 14+: Bitte überprüfe in den Einstellungen, ob die Berechtigung für \"Wecker und Erinnerungen\" erteilt ist.\n\n• Xiaomi/Huawei/Samsung: Wenn Du die App wegwischst, werden Alarme oft blockiert. Bitte die App im Task-Manager sperren oder \"AutoStart\" aktivieren.",
                   [
-                    { text: settings.language === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
-                    { text: settings.language === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() }
+                    { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
+                    { text: lang === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() }
                   ]
                 );
               });
@@ -172,10 +172,10 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
             <Text style={styles.troubleEmoji}>🛠️</Text>
             <View style={{ flex: 1 }}>
               <Text style={[styles.troubleTitle, { color: T.text }]}>
-                {settings.language === "en" ? "Fix Notifications" : "Benachrichtigungen reparieren"}
+                {lang === "en" ? "Fix Notifications" : "Benachrichtigungen reparieren"}
               </Text>
               <Text style={[styles.troubleSub, { color: T.sub }]}>
-                {settings.language === "en"
+                {lang === "en"
                   ? "Not receiving alerts? Check permissions & battery."
                   : "Keine Erinnerungen? Rechte & Akku-Optionen prüfen."}
               </Text>
@@ -184,11 +184,11 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
 
           {/* ── Netzentgelt / Surcharge ─────────────────────── */}
           <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>
-            {settings.language === "en" ? "GRID FEE ESTIMATE" : "NETZENTGELT"}
+            {lang === "en" ? "GRID FEE ESTIMATE" : "NETZENTGELT"}
           </Text>
           <View style={[styles.surchargeBox, { borderColor: T.inputBorder, backgroundColor: T.bg }]}>
             <Text style={[styles.surchargeSub, { color: T.sub }]}>
-              {settings.language === "en"
+              {lang === "en"
                 ? `Added to spot price. Default 23 ct covers most German regions.`
                 : `Zum Spotpreis addiert. Standard 23 ct gilt für die meisten deutschen Regionen.`}
             </Text>

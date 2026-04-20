@@ -1,13 +1,32 @@
 // ============================================================
 // StromAmpel App — Price Classification
+// v2: Negative-avg bug fix — use absolute value for threshold math
 // ============================================================
 
 import type { Status } from "./types";
 
-/** Classify a price relative to the day average */
+/**
+ * Classify a price relative to the remaining-hours average.
+ *
+ * Fix (v2): Original formula `avg * 0.88` inverts when avg < 0 because
+ * multiplying a negative number by 0.88 makes it LESS negative (higher),
+ * collapsing the YELLOW band and reversing GREEN/RED semantics.
+ *
+ * Solution: derive thresholds from `avg ± abs(avg) * factor` which is
+ * mathematically identical to the original for positive avg and correct
+ * for negative avg.
+ *
+ *   GREEN  threshold = avg - |avg| * 0.12  (≡ avg * 0.88 when avg > 0)
+ *   YELLOW threshold = avg + |avg| * 0.10  (≡ avg * 1.10 when avg > 0)
+ *
+ * GREEN threshold = 0.88 aligned with CHEAP_THRESHOLD in windows.ts.
+ */
 export function classifyPrice(priceCt: number, avgCt: number): Status {
-  if (priceCt <= avgCt * 0.85) return "GREEN";
-  if (priceCt <= avgCt * 1.10) return "YELLOW";
+  const absAvg     = Math.abs(avgCt);
+  const greenCeil  = avgCt - absAvg * 0.12; // 12% cheaper than avg
+  const yellowCeil = avgCt + absAvg * 0.10; // 10% more expensive than avg
+  if (priceCt <= greenCeil)  return "GREEN";
+  if (priceCt <= yellowCeil) return "YELLOW";
   return "RED";
 }
 
@@ -89,6 +108,8 @@ const STATUS_GRADIENT: Record<string, [string, string]> = {
 /**
  * Continuous green → yellow → red heatmap across the full day price range.
  * t=0 (cheapest) = vivid green, t=1 (most expensive) = vivid red.
+ * Works correctly for negative prices: normalization is (price - dayMin) / range,
+ * which is always 0–1 regardless of sign.
  * status param kept for API compatibility but is not used.
  */
 export function priceToGradientColor(

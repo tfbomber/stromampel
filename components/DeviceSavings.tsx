@@ -128,33 +128,11 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
       sc:  new Animated.Value(0),
     }))
   ).current;
-  const amtOpacity = useRef(new Animated.Value(0)).current;
-  const amtScale   = useRef(new Animated.Value(0.5)).current;
-  const amtTranslY = useRef(new Animated.Value(0)).current;
-  const counterRef  = useRef(new Animated.Value(0)).current;
-  const [animAmt,   setAnimAmt]   = useState("0,00");
   const [showMoney, setShowMoney] = useState(false);
-
-  useEffect(() => {
-    const id = counterRef.addListener(({ value }) =>
-      setAnimAmt(value.toFixed(2).replace(".", ","))
-    );
-    return () => counterRef.removeListener(id);
-  }, []);
 
   function triggerCelebration(savingEur: number) {
     setShowMoney(true);
-    setAnimAmt("0,00");
-    amtOpacity.setValue(0); amtScale.setValue(0.5); amtTranslY.setValue(0);
-    counterRef.setValue(0);
     coinAnims.forEach((c) => { c.op.setValue(0); c.tx.setValue(0); c.ty.setValue(0); c.rot.setValue(0); c.sc.setValue(0); });
-
-    // Amount: count up + spring in
-    Animated.parallel([
-      Animated.timing(amtOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
-      Animated.spring(amtScale,   { toValue: 1, useNativeDriver: true, speed: 38, bounciness: 18 }),
-    ]).start();
-    Animated.timing(counterRef, { toValue: savingEur, duration: 950, useNativeDriver: false }).start();
 
     // Coins: staggered arc launch
     COINS.forEach((coin, i) => {
@@ -173,8 +151,6 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
     // Fade everything out at peak
     setTimeout(() => {
       Animated.parallel([
-        Animated.timing(amtOpacity, { toValue: 0, duration: 480, useNativeDriver: true }),
-        Animated.timing(amtTranslY, { toValue: -50, duration: 480, useNativeDriver: true }),
         ...coinAnims.map((c) => Animated.timing(c.op, { toValue: 0, duration: 480, useNativeDriver: true })),
       ]).start(() => setShowMoney(false));
     }, 1550);
@@ -270,16 +246,6 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
               <Text style={styles.coinEmoji}>{COINS[i].emoji}</Text>
             </Animated.View>
           ))}
-          <Animated.View
-            style={{ alignItems: "center", opacity: amtOpacity,
-              transform: [{ scale: amtScale }, { translateY: amtTranslY }] }}
-          >
-            <Text style={styles.moneyPlus}>+</Text>
-            <Text style={styles.moneyAmount}>{animAmt} €</Text>
-            <Text style={styles.moneyLabel}>
-              {lang === "en" ? "S A V E D" : "G E S P A R T"}
-            </Text>
-          </Animated.View>
         </View>
       </Modal>
 
@@ -442,23 +408,6 @@ export default function DeviceSavings({ todaySlots, currentPriceCt, tariffType, 
           })}
         </View>
 
-        {/* ── Tip: aligned with HeroCard hint format ── */}
-        {(() => {
-          const showToday = todayNextWindow && todayNextWindow.startHour > nowHour;
-          const w = showToday ? todayNextWindow! : tomorrowBestWindow ?? null;
-          if (!w) return null;
-          const ct = w.avgCt.toFixed(1).replace(".", ",");
-          const tipText = (w.date === "today" || showToday)
-            ? (lang === "en"
-                ? `Cheaper from ${w.label} · ø ${ct} ct`
-                : `💡 Ab ${w.label} günstiger · ø ${ct} ct`)
-            : (lang === "en"
-                ? `Tomorrow: cheaper from ${w.label} · ø ${ct} ct`
-                : `💡 Morgen: günstiger ab ${w.label} · ø ${ct} ct`);
-          return (
-            <Text style={[styles.tip, { color: T.sub }]}>{tipText}</Text>
-          );
-        })()}
       </View>
     </>
   );
@@ -485,15 +434,6 @@ const styles = StyleSheet.create({
   // Money rain modal
   moneyRoot:   { flex: 1, alignItems: "center", justifyContent: "center" },
   coinEmoji:   { fontSize: 30 },
-  moneyPlus:   { fontSize: 24, fontWeight: "900", color: "#16a34a", opacity: 0.85 },
-  moneyAmount: {
-    fontSize: 64, fontWeight: "900", color: "#15803d",
-    letterSpacing: -2, lineHeight: 70,
-    textShadowColor: "rgba(21,128,61,0.35)",
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 22,
-  },
-  moneyLabel:  { fontSize: 13, fontWeight: "700", color: "#22c55e", letterSpacing: 4, marginTop: 6 },
   // MODE A header
   nowBanner:   { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4, marginBottom: 8 },
   nowIcon:     { fontSize: 20 },

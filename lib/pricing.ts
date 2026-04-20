@@ -4,6 +4,7 @@
 // ============================================================
 
 import type { HourSlot, DayData, CheapWindow } from "./types";
+import { classifyPrice } from "./classify";
 
 /**
  * Additional ct/kWh charged by the provider ABOVE the raw spot price (netto).
@@ -27,11 +28,29 @@ export function adjustPriceCt(rawCt: number, anbieter: string): number {
   return Math.round(((rawCt + markup) * VAT) * 10) / 10;
 }
 
-/** Remap all priceCt values in a slot array. VAT always applied; markup = 0 when no provider. */
+/** Remap all priceCt values in a slot array and RE-CLASSIFY status.
+ *  Re-classification is necessary because additive markup changes relative ratios:
+ *  (p + markup) / (avg + markup) ≠ p / avg
+ *  Avg baseline: non-past slots only (matching buildSlots / findNextCheapWindow baseline). */
 export function adjustSlots(slots: HourSlot[], anbieter: string): HourSlot[] {
-  return slots.map((s) => ({
+  // Step 1: adjust all priceCt values
+  const adjusted = slots.map((s) => ({
     ...s,
     priceCt: s.priceCt !== null ? adjustPriceCt(s.priceCt, anbieter) : null,
+  }));
+
+  // Step 2: compute adjusted remaining-hours avg (same baseline as buildSlots)
+  const remainingVals = adjusted
+    .filter((s) => !s.isPast && s.priceCt !== null)
+    .map((s) => s.priceCt!);
+  const adjAvg = remainingVals.length > 0
+    ? remainingVals.reduce((a, b) => a + b, 0) / remainingVals.length
+    : 0;
+
+  // Step 3: re-classify with adjusted prices so GREEN/YELLOW/RED is always correct
+  return adjusted.map((s) => ({
+    ...s,
+    status: s.priceCt !== null ? classifyPrice(s.priceCt, adjAvg) : "UNKNOWN",
   }));
 }
 

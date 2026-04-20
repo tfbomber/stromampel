@@ -185,10 +185,14 @@ export async function scheduleAllUpcomingNotifications(
     const isToday    = fireAt.toDateString() === now.toDateString();
     const targetDate: "today" | "tomorrow" = isToday ? "today" : "tomorrow";
     const dayData    = isToday ? data.today : data.tomorrow;
-    // Find closest window or synthesize from nearest slot
-    const winHour    = Math.min(23, fireAt.getHours() + Math.round(timing / 60));
-    const slot       = dayData?.slots.find(s => s.hour === winHour);
-    const avgCt      = slot?.priceCt ?? 0;
+    // Find closest slot to winHour (exact match → nearest neighbour → fallback 0)
+    const winHour     = Math.min(23, fireAt.getHours() + Math.round(timing / 60));
+    const nearestSlot = dayData?.slots
+      .filter(s => s.priceCt !== null)
+      .reduce((best: (typeof dayData.slots)[0] | null, s) =>
+        best === null || Math.abs(s.hour - winHour) < Math.abs(best.hour - winHour) ? s : best,
+        null);
+    const avgCt       = nearestSlot?.priceCt ?? 0;
     const synth: CheapWindow = {
       startHour: winHour,
       endHour:   Math.min(23, winHour + 1),

@@ -22,11 +22,23 @@ function currentMonth(): string {
 }
 export { currentMonth as getCurrentMonth };
 
+// ISSUE-1 fix: prune records older than 90 days to prevent unbounded storage growth
+const CLAIM_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
 // ── Read all claims from storage ──────────────────────────────
 async function readAll(): Promise<ClaimRecord[]> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const all: ClaimRecord[] = JSON.parse(raw);
+    // Prune stale records; write back only if anything was removed
+    const cutoff = Date.now() - CLAIM_TTL_MS;
+    const fresh = all.filter((c) => c.claimedAt >= cutoff);
+    if (fresh.length < all.length) {
+      await AsyncStorage.setItem(KEY, JSON.stringify(fresh)).catch(() => {});
+      console.log(`[Savings] Pruned ${all.length - fresh.length} old claim(s) (>90 days)`);
+    }
+    return fresh;
   } catch {
     return [];
   }

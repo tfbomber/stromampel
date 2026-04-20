@@ -54,7 +54,10 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
   const onChangeRef = useRef(onActiveHourChange);
   useEffect(() => { onChangeRef.current = onActiveHourChange; }, [onActiveHourChange]);
 
-  const allPrices = slots.filter((s) => s.priceCt !== null).map((s) => s.priceCt!);
+  // Use effective prices (spot + surcharge) for all bar geometry and colour.
+  // When surchargeCt is omitted (e.g. NotifySheet picker), sc=0 → identical to previous behaviour.
+  const sc        = surchargeCt ?? 0;
+  const allPrices = slots.filter((s) => s.priceCt !== null).map((s) => s.priceCt! + sc);
   const dayMin    = allPrices.length > 0 ? Math.min(...allPrices) : 0;
   const dayMax    = allPrices.length > 0 ? Math.max(...allPrices) : 0;
 
@@ -79,8 +82,8 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
     slot: HourSlot,
     isActive: boolean
   ): { above: number; below: number } {
-    const p = slot.priceCt;
-    if (p === null) return { above: 0, below: 0 };
+    if (slot.priceCt === null) return { above: 0, below: 0 };
+    const p = slot.priceCt + sc;   // effective price (spot + surcharge)
 
     const scale = isActive ? 1.25 : 1.0;
 
@@ -103,9 +106,10 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
   function barColor(slot: HourSlot): string {
     if (slot.isPast) return (T as any).barPast ?? "#d1d5db";
     if (slot.priceCt === null) return statusToSlotColor(slot.status);
-    if (slot.priceCt < 0) return NEG_COLOR;
-    // Positive: use full day range for gradient (same relative heat-map as before)
-    return priceToGradientColor(slot.priceCt, dayMin, dayMax, slot.status);
+    const ep = slot.priceCt + sc;   // effective price
+    if (ep < 0) return NEG_COLOR;   // only truly negative when spot < -surchargeCt
+    // Gradient mapped to effective price range (dayMin/dayMax are already effective)
+    return priceToGradientColor(ep, dayMin, dayMax, slot.status);
   }
 
   const getHour = useCallback((x: number) => {
