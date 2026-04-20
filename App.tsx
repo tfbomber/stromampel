@@ -100,6 +100,8 @@ function AppInner() {
   const [activeBarSel, setActiveBarSel] = useState<{ barId: string; hour: number } | null>(null);
   // OS-level notification permission state: null=not checked, true=ok, false=denied
   const [hasOsNotifPerm, setHasOsNotifPerm] = useState<boolean | null>(null);
+  // missedAlarmAt: set when a once-mode alarm fires but OS may not have delivered it (within 30 min)
+  const [missedAlarmAt, setMissedAlarmAt] = useState<number | null>(null);
   // langRef: keeps current language accessible inside stale useCallback closures
   const langRef = useRef<"de" | "en">("de");
   // notifyActiveRef: keeps notifyActive accessible inside stale AppState closure
@@ -563,18 +565,18 @@ function AppInner() {
               if (isOnce && settings.notifyFireAt && settings.notifyFireAt > Date.now()) {
                 nextFireMs = settings.notifyFireAt;
               } else if (!isOnce) {
-                // daily_smart: derive from today's or tomorrow's cheapest window
+                // daily_smart: derive from today's or tomorrow's core block start
                 const todayCore = today?.nextCheapWindow ?? today?.cheapestWindow ?? null;
                 const tomorrowCore = tomorrow?.cheapestWindow ?? null;
                 const now = new Date();
-                if (todayCore && todayCore.startHour > now.getHours()) {
-                  const d = new Date(); d.setHours(todayCore.startHour, 0, 0, 0);
+                if (todayCore && todayCore.coreStartHour > now.getHours()) {
+                  const d = new Date(); d.setHours(todayCore.coreStartHour, 0, 0, 0);
                   const fire = d.getTime() - timingMin * 60_000;
                   if (fire > Date.now()) nextFireMs = fire;
                 }
                 if (!nextFireMs && tomorrowCore) {
                   const d = new Date(); d.setDate(d.getDate() + 1);
-                  d.setHours(tomorrowCore.startHour, 0, 0, 0);
+                  d.setHours(tomorrowCore.coreStartHour, 0, 0, 0);
                   nextFireMs = d.getTime() - timingMin * 60_000;
                 }
               }

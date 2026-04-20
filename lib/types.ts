@@ -22,6 +22,9 @@ export interface CheapWindow {
   /** Best consecutive 3-hour sub-block within the window. */
   coreLabel: string;    // e.g. "13–16 Uhr"
   coreAvgCt: number;    // average ct/kWh for the 3h core block
+  /** Start hour of the 3h core block — used by daily_smart notification scheduling.
+   *  Equals startHour when no valid 3h block exists (single-hour fallback). */
+  coreStartHour: number;
 }
 
 export interface DayData {

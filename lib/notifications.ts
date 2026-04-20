@@ -199,8 +199,9 @@ export async function scheduleAllUpcomingNotifications(
       label:     `${winHour}:00–${Math.min(23, winHour + 1)}:00`,
       avgCt,
       date:      targetDate,
-      coreLabel:  `${winHour}–${Math.min(23, winHour + 1)} Uhr`,
-      coreAvgCt:  Math.round(avgCt * 10) / 10,
+      coreLabel:     `${winHour}–${Math.min(23, winHour + 1)} Uhr`,
+      coreAvgCt:     Math.round(avgCt * 10) / 10,
+      coreStartHour: winHour,   // once-mode: fire time IS the core window
     };
     pending.push({ window: synth, fireAt });
     console.log(`[Notifications] once: fireAt=${fireAt.toISOString()} window=${winHour}:00`);
@@ -210,17 +211,17 @@ export async function scheduleAllUpcomingNotifications(
     const todayCore    = data.today.nextCheapWindow ?? data.today.cheapestWindow ?? null;
     const tomorrowCore = data.tomorrow?.cheapestWindow ?? null;
 
-    if (todayCore && todayCore.startHour > nowHour) {
-      const fireAt = computeFireAt(todayCore.startHour, "today", timing);
+    if (todayCore && todayCore.coreStartHour > nowHour) {
+      const fireAt = computeFireAt(todayCore.coreStartHour, "today", timing);
       if (fireAt > now) {
         pending.push({ window: todayCore, fireAt });
-        console.log(`[Notifications] daily_smart today: ${todayCore.coreLabel} fireAt=${fireAt.toISOString()}`);
+        console.log(`[Notifications] daily_smart today: coreStart=${todayCore.coreStartHour}h (${todayCore.coreLabel}) fireAt=${fireAt.toISOString()}`);
       }
     }
     if (tomorrowCore) {
-      const fireAt = computeFireAt(tomorrowCore.startHour, "tomorrow", timing);
+      const fireAt = computeFireAt(tomorrowCore.coreStartHour, "tomorrow", timing);
       pending.push({ window: tomorrowCore, fireAt });
-      console.log(`[Notifications] daily_smart tomorrow: ${tomorrowCore.coreLabel} fireAt=${fireAt.toISOString()}`);
+      console.log(`[Notifications] daily_smart tomorrow: coreStart=${tomorrowCore.coreStartHour}h (${tomorrowCore.coreLabel}) fireAt=${fireAt.toISOString()}`);
     }
   }
 

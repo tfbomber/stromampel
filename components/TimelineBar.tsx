@@ -77,6 +77,26 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
     ? CONTAINER_H - topH
     : 0;
 
+  // ── SpreadRatio: prevent false visual impression on flat-price days ──────────
+  // actualSpread = full day price range (effective prices, spot + surcharge)
+  // REFERENCE_SPREAD = typical German intra-day spread (10 ct/kWh)
+  // spreadRatio = 0 → all bars same height; 1 → full height variation
+  const REFERENCE_SPREAD = 10;
+  const actualSpread  = dayMax - dayMin;             // always >= 0
+  const spreadRatio   = Math.min(1, actualSpread > 0 ? actualSpread / REFERENCE_SPREAD : 0);
+
+  // Positive zone: base height + variable height range (both anchored to topH)
+  const posBaseH    = Math.round((hasMixed ? topH : CONTAINER_H) * 0.18);
+  const posCapH     = Math.round((hasMixed ? topH : CONTAINER_H) * 0.80 * spreadRatio);
+  // Negative zone: same logic for botH
+  const negBaseH    = Math.round(botH * 0.18);
+  const negCapH     = Math.round(botH * 0.80 * spreadRatio);
+  // Minimum bar height for positive price > 0 (overrides base when base is tiny)
+  const posMinBarH  = Math.max(BAR_MIN_PX, posBaseH);
+  const negMinBarH  = Math.max(BAR_MIN_PX, negBaseH);
+  // Positive price floor for normalization: clamp dayMin to 0 (negative prices don't affect pos baseline)
+  const posMin      = Math.max(dayMin, 0);
+
   // ── Bar height computation ────────────────────────────────────
   function barHeights(
     slot: HourSlot,
@@ -85,20 +105,20 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
     if (slot.priceCt === null) return { above: 0, below: 0 };
     const p = slot.priceCt + sc;   // effective price (spot + surcharge)
 
-    const scale = isActive ? 1.25 : 1.0;
+    const scale = isActive ? 1.18 : 1.0;  // subtle active scale (was 1.25, reduced for var-height compat)
 
     if (p >= 0) {
-      // Positive price: grows upward from zero line
-      const raw = posRange > 0
-        ? Math.round((p / posRange) * topH * 0.90 * scale)
-        : BAR_MIN_PX;
-      return { above: p > 0 ? Math.min(topH, Math.max(BAR_MIN_PX, raw)) : 0, below: 0 };
+      if (posRange === 0) return { above: posMinBarH, below: 0 };  // all-same-price day → equal bars
+      // Normalize within positive range: t=0 (cheapest positive) → t=1 (most expensive)
+      const t = Math.max(0, Math.min(1, (p - posMin) / posRange));
+      const h = Math.round((posBaseH + posCapH * t) * scale);
+      return { above: p > 0 ? Math.min(topH, Math.max(posMinBarH, h)) : 0, below: 0 };
     } else {
       // Negative price: grows downward from zero line
-      const raw = negRange > 0
-        ? Math.round((Math.abs(p) / negRange) * botH * 0.90 * scale)
-        : BAR_MIN_PX;
-      return { above: 0, below: Math.min(botH, Math.max(BAR_MIN_PX, raw)) };
+      if (negRange === 0) return { above: 0, below: negMinBarH };
+      const t = Math.max(0, Math.min(1, Math.abs(p) / negRange));
+      const h = Math.round((negBaseH + negCapH * t) * scale);
+      return { above: 0, below: Math.min(botH, Math.max(negMinBarH, h)) };
     }
   }
 

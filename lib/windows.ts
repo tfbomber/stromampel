@@ -90,8 +90,9 @@ export function findNextCheapWindow(
           label:     buildLabel(future[i].hour, future[j - 1].hour + 1),
           avgCt:     Math.round(avgCt * 10) / 10,
           date,
-          coreLabel:  core ? buildLabel(core.startHour, core.endHour) : buildLabel(future[i].hour, future[j - 1].hour + 1),
-          coreAvgCt:  core ? core.avgCt : Math.round(avgCt * 10) / 10,
+          coreLabel:     core ? buildLabel(core.startHour, core.endHour) : buildLabel(future[i].hour, future[j - 1].hour + 1),
+          coreAvgCt:     core ? core.avgCt : Math.round(avgCt * 10) / 10,
+          coreStartHour: core ? core.startHour : future[i].hour,
         };
 
         if (!best || candidate.coreAvgCt < best.coreAvgCt) best = candidate;
