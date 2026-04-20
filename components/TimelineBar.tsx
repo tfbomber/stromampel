@@ -109,8 +109,13 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
 
     if (p >= 0) {
       if (posRange === 0) return { above: posMinBarH, below: 0 };  // all-same-price day → equal bars
-      // Normalize within positive range: t=0 (cheapest positive) → t=1 (most expensive)
-      const t = Math.max(0, Math.min(1, (p - posMin) / posRange));
+      // Normalize within positive range: t=0 (cheapest) → t=1 (most expensive).
+      // Denominator MUST be (posRange - posMin) = dayMax - dayMin, NOT posRange (= dayMax).
+      // Using posRange as denominator caused t_max < 1 on typical days (e.g. 15/20=0.75).
+      const posNormRange = posRange - posMin;  // = dayMax - dayMin (actual spread, always > 0 here)
+      const t = posNormRange > 0
+        ? Math.max(0, Math.min(1, (p - posMin) / posNormRange))
+        : 1;  // posMin == posRange means all-same positive price → treat as max
       const h = Math.round((posBaseH + posCapH * t) * scale);
       return { above: p > 0 ? Math.min(topH, Math.max(posMinBarH, h)) : 0, below: 0 };
     } else {
