@@ -35,8 +35,6 @@ interface Props {
 interface HintParts {
   prefix: string;
   time:   string;
-  mid:    string;
-  price:  string;   // effective price string (already computed)
 }
 
 function buildHintParts(
@@ -52,9 +50,6 @@ function buildHintParts(
   }
 
   if (nextCheap) {
-    // Show effective average ct in the hint
-    const effCt  = nextCheap.coreAvgCt + surchargeCt;
-    const ct     = `≈ ${effCt.toFixed(1).replace(".", ",")} ct`;
     const label  = nextCheap.coreLabel;
 
     if (status === "GREEN") {
@@ -62,25 +57,19 @@ function buildHintParts(
         ? (lang === "en" ? "Tomorrow · " : "Morgen · ")
         : "";
       return {
-        prefix: lang === "en" ? "Best window: " : "Günstigste Phase: ",
+        prefix: lang === "en" ? "Best: " : "Beste: ",
         time:   `${dayPrefix}${label}`,
-        mid:    " · ø ",
-        price:  ct,
       };
     }
     if (nextCheap.date === "today") {
       return {
-        prefix: lang === "en" ? "From " : "Ab ",
+        prefix: lang === "en" ? "Cheaper from " : "Günstiger ab ",
         time:   label,
-        mid:    lang === "en" ? " cheaper · ø " : " günstiger · ø ",
-        price:  ct,
       };
     }
     return {
-      prefix: lang === "en" ? "Tomorrow: from " : "Morgen: ab ",
+      prefix: lang === "en" ? "Tomorrow: " : "Morgen: ",
       time:   label,
-      mid:    lang === "en" ? " cheaper · ø " : " günstiger · ø ",
-      price:  ct,
     };
   }
 
@@ -110,6 +99,9 @@ export default function HeroCard({ current, nextCheap, surchargeCt }: Props) {
   const effectiveNum   = effectiveCt !== null
     ? effectiveCt.toFixed(1).replace(".", ",")
     : "–";
+  const effectiveNote = lang === "en"
+    ? `incl. ~${surchargeCt} ct fees`
+    : `inkl. ~${surchargeCt} ct Aufschlag`;
   const spotLabel = spotCt !== null
     ? `${spotCt.toFixed(1).replace(".", ",")} ct`
     : "–";
@@ -124,11 +116,11 @@ export default function HeroCard({ current, nextCheap, surchargeCt }: Props) {
   }
 
   return (
-    <View style={[styles.card, { backgroundColor: T.bg, borderColor: T.border }]}>
+    <View style={[styles.card, { backgroundColor: T.card, borderColor: T.border }]}> 
       {/* Accent bar */}
       <View style={[styles.accentBar, { backgroundColor: accentColor }]} />
 
-      <View style={[styles.inner, { backgroundColor: T.bg }]}>
+      <View style={[styles.inner, { backgroundColor: T.card }]}> 
 
         {/* Status row */}
         <View style={styles.statusRow}>
@@ -154,13 +146,15 @@ export default function HeroCard({ current, nextCheap, surchargeCt }: Props) {
           </Pressable>
         </View>
 
+        <Text style={[styles.effectiveNote, { color: T.sub }]}>{effectiveNote}</Text>
+
         {/* Tooltip — Spot price + surcharge explanation (concise) */}
         {showTooltip && (
-          <View style={[styles.tooltip, { backgroundColor: T.card, borderColor: T.border }]}>
-            <Text style={[styles.tooltipText, { color: T.sub }]}>
+          <View style={[styles.tooltip, { backgroundColor: T.card, borderColor: T.border }]}> 
+            <Text style={[styles.tooltipText, { color: T.sub }]}> 
               {lang === "en"
-                ? `Spot ${spotLabel}  +  ~${surchargeCt} ct grid fees`
-                : `Spot ${spotLabel}  +  ~${surchargeCt} ct Netzentgelt`}
+                ? `Spot only: ${spotLabel}`
+                : `Nur Spot: ${spotLabel}`}
             </Text>
           </View>
         )}
@@ -171,14 +165,10 @@ export default function HeroCard({ current, nextCheap, surchargeCt }: Props) {
             {(hintParts as { plain: string }).plain}
           </Text>
         ) : (
-          <Text style={[styles.hint, { color: T.sub }]}>
+          <Text style={[styles.hint, { color: T.sub }]}> 
             {(hintParts as HintParts).prefix}
-            <Text style={[styles.hintTime, { color: accentColor }]}>
+            <Text style={[styles.hintTime, { color: accentColor }]}> 
               {(hintParts as HintParts).time}
-            </Text>
-            {(hintParts as HintParts).mid}
-            <Text style={[styles.hintPrice, { color: T.text }]}>
-              {(hintParts as HintParts).price}
             </Text>
           </Text>
         )}
@@ -190,24 +180,25 @@ export default function HeroCard({ current, nextCheap, surchargeCt }: Props) {
 const styles = StyleSheet.create({
   card: {
     borderRadius: 14,
-    marginTop: 10, overflow: "hidden",
+    marginTop: 8, overflow: "hidden",
     shadowColor: "#000", shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
   },
   accentBar:   { height: 3, width: "100%" },
-  inner:       { paddingVertical: 18, paddingHorizontal: 24, alignItems: "center" },
-  statusRow:   { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 },
+  inner:       { paddingVertical: 16, paddingHorizontal: 20, alignItems: "center" },
+  statusRow:   { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
   emoji:       { fontSize: 18 },
-  statusLabel: { fontSize: 15, fontWeight: "600", letterSpacing: 0.2 },
+  statusLabel: { fontSize: 14, fontWeight: "600", letterSpacing: 0.2 },
   // Effective price (large) + ℹ️
-  priceRow:    { flexDirection: "row", alignItems: "flex-end", marginBottom: 10, gap: 3 },
-  pricePrefix: { fontSize: 18, fontWeight: "400", paddingBottom: 10, opacity: 0.55 },
-  price:       { fontSize: 56, fontWeight: "800", letterSpacing: -2, lineHeight: 60 },
-  unitBlock:   { paddingBottom: 9, paddingLeft: 2, justifyContent: "flex-end" },
-  unitCt:      { fontSize: 14, fontWeight: "600", lineHeight: 16, opacity: 0.75 },
-  unitKwh:     { fontSize: 11, fontWeight: "400", lineHeight: 13, opacity: 0.5 },
-  infoBtn:     { paddingBottom: 6, paddingLeft: 6 },
+  priceRow:    { flexDirection: "row", alignItems: "flex-end", marginBottom: 4, gap: 3 },
+  pricePrefix: { fontSize: 16, fontWeight: "400", paddingBottom: 9, opacity: 0.55 },
+  price:       { fontSize: 52, fontWeight: "800", letterSpacing: -1.8, lineHeight: 56 },
+  unitBlock:   { paddingBottom: 8, paddingLeft: 2, justifyContent: "flex-end" },
+  unitCt:      { fontSize: 13, fontWeight: "600", lineHeight: 15, opacity: 0.75 },
+  unitKwh:     { fontSize: 10, fontWeight: "400", lineHeight: 12, opacity: 0.5 },
+  infoBtn:     { paddingBottom: 5, paddingLeft: 5 },
   infoIcon:    { fontSize: 13, opacity: 0.45 },
+  effectiveNote: { fontSize: 11, lineHeight: 15, marginBottom: 8, opacity: 0.72 },
   // Tooltip — compact, single line
   tooltip: {
     borderWidth: 1, borderRadius: 8,
@@ -215,7 +206,6 @@ const styles = StyleSheet.create({
   },
   tooltipText: { fontSize: 10, lineHeight: 14, textAlign: "center" },
   // Hint
-  hint:      { fontSize: 13, textAlign: "center", lineHeight: 19, opacity: 0.9 },
-  hintTime:  { fontWeight: "800", fontSize: 13 },
-  hintPrice: { fontWeight: "700", fontSize: 13 },
+  hint:      { fontSize: 12, textAlign: "center", lineHeight: 18, opacity: 0.9 },
+  hintTime:  { fontWeight: "800", fontSize: 12 },
 });

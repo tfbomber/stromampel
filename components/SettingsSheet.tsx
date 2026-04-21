@@ -3,7 +3,7 @@
 // v2: + Language selector (DE / EN) + i18n support
 // ============================================================
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, Pressable, StyleSheet, Modal,
   Animated, TouchableOpacity, ScrollView,
@@ -30,6 +30,7 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
   const T = useTheme();
   const { t, lang } = useI18n();
   const slideAnim = useRef(new Animated.Value(300)).current;
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
     Animated.spring(slideAnim, {
@@ -147,71 +148,84 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
             })}
           </View>
 
-          {/* ── Troubleshooting ─────────────────────────────── */}
+          {/* ── Advanced ────────────────────────────────── */}
           <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>
-            {lang === "en" ? "TROUBLESHOOTING" : "FEHLERBEHEBUNG"}
+            {lang === "en" ? "ADVANCED" : "ERWEITERT"}
           </Text>
           <Pressable
-            style={[styles.troubleCard, { borderColor: T.inputBorder, backgroundColor: T.bg }]}
+            style={[styles.advancedToggle, { borderColor: T.inputBorder, backgroundColor: T.bg }]}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-              import("react-native").then(({ Alert, Linking }) => {
-                Alert.alert(
-                  lang === "en" ? "Notification Fixes" : "Benachrichtigungs-Hilfe",
-                  lang === "en"
-                    ? "• Android 14+: Please ensure \"Alarms & reminders\" (Exact Alarms) permission is granted.\n\n• Xiaomi/Huawei/Samsung: If the app is swiped away from Recents, alarms may be killed. Lock the app in Recents or enable \"AutoStart\" in phone settings."
-                    : "• Android 14+: Bitte überprüfe in den Einstellungen, ob die Berechtigung für \"Wecker und Erinnerungen\" erteilt ist.\n\n• Xiaomi/Huawei/Samsung: Wenn Du die App wegwischst, werden Alarme oft blockiert. Bitte die App im Task-Manager sperren oder \"AutoStart\" aktivieren.",
-                  [
-                    { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
-                    { text: lang === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() }
-                  ]
-                );
-              });
+              setAdvancedOpen(v => !v);
             }}
           >
-            <Text style={styles.troubleEmoji}>🛠️</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.troubleTitle, { color: T.text }]}>
-                {lang === "en" ? "Fix Notifications" : "Benachrichtigungen reparieren"}
-              </Text>
-              <Text style={[styles.troubleSub, { color: T.sub }]}>
-                {lang === "en"
-                  ? "Not receiving alerts? Check permissions & battery."
-                  : "Keine Erinnerungen? Rechte & Akku-Optionen prüfen."}
-              </Text>
-            </View>
+            <Text style={[styles.advancedTitle, { color: T.text }]}>
+              {lang === "en" ? "Price estimate & notification help" : "Preisannahme & Hinweis zur Erinnerung"}
+            </Text>
+            <Text style={[styles.advancedCaret, { color: T.sub }]}>{advancedOpen ? "−" : "+"}</Text>
           </Pressable>
 
-          {/* ── Netzentgelt / Surcharge ─────────────────────── */}
-          <Text style={[styles.sectionLabel, { color: T.sectionLabel }]}>
-            {lang === "en" ? "GRID FEE ESTIMATE" : "NETZENTGELT"}
-          </Text>
-          <View style={[styles.surchargeBox, { borderColor: T.inputBorder, backgroundColor: T.bg }]}>
-            <Text style={[styles.surchargeSub, { color: T.sub }]}>
-              {lang === "en"
-                ? `Added to spot price. Default 23 ct covers most German regions.`
-                : `Zum Spotpreis addiert. Standard 23 ct gilt für die meisten deutschen Regionen.`}
-            </Text>
-            <View style={styles.surchargeRow}>
-              {[18, 20, 23, 25, 28].map(v => {
-                const sel = (settings.surchargeCt ?? 23) === v;
-                return (
-                  <Pressable
-                    key={v}
-                    style={[styles.surchargeChip,
-                      { borderColor: sel ? GREEN : T.inputBorder,
-                        backgroundColor: sel ? "#f0fdf4" : T.bg }]}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-                      onChange({ surchargeCt: v });
-                    }}
-                  >
-                    <Text style={[styles.surchargeChipText, { color: sel ? "#15803d" : T.sub }]}>{v} ct</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
+          {advancedOpen && (
+            <>
+              <View style={[styles.surchargeBox, { borderColor: T.inputBorder, backgroundColor: T.bg }]}> 
+                <Text style={[styles.surchargeSub, { color: T.sub }]}> 
+                  {lang === "en"
+                    ? "Adds an estimated grid fee to the spot price."
+                    : "Addiert ein geschätztes Netzentgelt zum Spotpreis."}
+                </Text>
+                <View style={styles.surchargeRow}>
+                  {[18, 20, 23, 25, 28].map(v => {
+                    const sel = (settings.surchargeCt ?? 23) === v;
+                    return (
+                      <Pressable
+                        key={v}
+                        style={[styles.surchargeChip,
+                          { borderColor: sel ? GREEN : T.inputBorder,
+                            backgroundColor: sel ? "#f0fdf4" : T.bg }]}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                          onChange({ surchargeCt: v });
+                        }}
+                      >
+                        <Text style={[styles.surchargeChipText, { color: sel ? "#15803d" : T.sub }]}>{v} ct</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <Pressable
+                style={[styles.troubleCard, { borderColor: T.inputBorder, backgroundColor: T.bg }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  import("react-native").then(({ Alert, Linking }) => {
+                    Alert.alert(
+                      lang === "en" ? "Notification Fixes" : "Benachrichtigungs-Hilfe",
+                      lang === "en"
+                        ? "Check notification permission and battery settings if reminders do not arrive."
+                        : "Prüfe Benachrichtigungsrechte und Akku-Einstellungen, falls Erinnerungen nicht ankommen.",
+                      [
+                        { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
+                        { text: lang === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() }
+                      ]
+                    );
+                  });
+                }}
+              >
+                <Text style={styles.troubleEmoji}>🛠️</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.troubleTitle, { color: T.text }]}> 
+                    {lang === "en" ? "Fix Notifications" : "Benachrichtigungen prüfen"}
+                  </Text>
+                  <Text style={[styles.troubleSub, { color: T.sub }]}> 
+                    {lang === "en"
+                      ? "Open system settings"
+                      : "Systemeinstellungen öffnen"}
+                  </Text>
+                </View>
+              </Pressable>
+            </>
+          )}
 
           <Text style={[styles.footerNote, { color: T.footer }]}>{t("savedLocal")}</Text>
           <Text style={[styles.versionNote, { color: T.footer }]}>
@@ -255,6 +269,12 @@ const styles = StyleSheet.create({
   pillText:    { fontSize: 13 },
   footerNote:  { fontSize: 11, textAlign: "center", marginTop: 4 },
   versionNote: { fontSize: 10, textAlign: "center", marginTop: 2, opacity: 0.6 },
+  advancedToggle: {
+    borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 12, paddingVertical: 12,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12,
+  },
+  advancedTitle: { fontSize: 12, fontWeight: "600", flex: 1, paddingRight: 12 },
+  advancedCaret: { fontSize: 20, lineHeight: 20 },
   troubleCard: {
     flexDirection: "row", alignItems: "center", gap: 12, padding: 12,
     borderRadius: 12, borderWidth: 1.5, marginBottom: 16,

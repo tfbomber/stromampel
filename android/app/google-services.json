@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "118861545814",
+    "project_id": "stromampel",
+    "storage_bucket": "stromampel.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:118861545814:android:5f1a989136b9e32f9256f7",
+        "android_client_info": {
+          "package_name": "de.stromampel.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBUVzzrOG_NALeIZTChNRdNCoaPC1xWLvM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

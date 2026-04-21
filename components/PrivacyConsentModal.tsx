@@ -44,39 +44,15 @@ export default function PrivacyConsentModal() {
       <View style={styles.overlay}>
         <View style={[styles.sheet, { backgroundColor: T.card }]}>
           {/* Header */}
-          <Text style={[styles.title, { color: T.text }]}>
+          <Text style={[styles.title, { color: T.text }]}> 
             {isDE ? "🔒 Datenschutz & Hinweise" : "🔒 Privacy & Notes"}
           </Text>
 
           <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-            {/* Section: What the app does */}
-            <Text style={[styles.sectionHead, { color: T.text }]}>
-              {isDE ? "Was diese App macht" : "What this app does"}
-            </Text>
-            <Text style={[styles.body, { color: T.sub }]}>
+            <Text style={[styles.body, { color: T.sub }]}> 
               {isDE
-                ? "StromAmpel zeigt dir Echtzeit-Strompreise vom deutschen Spotmarkt und hilft dir, günstige Ladezeiten für Haushaltsgeräte und E-Autos zu finden."
-                : "StromAmpel shows real-time electricity prices from the German spot market and helps you find cheap charging times for appliances and EVs."}
-            </Text>
-
-            {/* Section: Data & Privacy */}
-            <Text style={[styles.sectionHead, { color: T.text }]}>
-              {isDE ? "Deine Daten" : "Your data"}
-            </Text>
-            <Text style={[styles.body, { color: T.sub }]}>
-              {isDE
-                ? "• Alle deine Einstellungen (Anbieter, Tarif, Benachrichtigungen) werden ausschließlich lokal auf deinem Gerät gespeichert.\n\n• Deine gespeicherten Aktionen verbleiben lokal – wir sehen sie nicht.\n\n• Die App verwendet Firebase Analytics zur anonymen Nutzungsanalyse (z. B. App-Öffnungen). Es werden keine personenbezogenen Daten erfasst oder weitergegeben.\n\n• Es werden keine Werbeanzeigen eingeblendet."
-                : "• All your settings (provider, tariff, notifications) are stored exclusively on your device.\n\n• Your saved actions remain local — we never see them.\n\n• The app uses Firebase Analytics for anonymous usage analysis (e.g. app opens). No personal data is collected or shared.\n\n• No advertisements are shown."}
-            </Text>
-
-            {/* Section: Data source */}
-            <Text style={[styles.sectionHead, { color: T.text }]}>
-              {isDE ? "Datenquelle" : "Data source"}
-            </Text>
-            <Text style={[styles.body, { color: T.sub }]}>
-              {isDE
-                ? "Preisdaten stammen vom EPEX Spotmarkt / ENTSO-E. Die App ist kostenlos und unabhängig."
-                : "Price data from EPEX Spot market / ENTSO-E. The app is free and independent."}
+                ? "• Zeigt Spotpreise und günstige Zeitfenster für Strom.\n\n• Deine Einstellungen bleiben auf diesem Gerät.\n\n• Anonyme Nutzungsdaten helfen, die App zu verbessern."
+                : "• Shows spot prices and cheaper electricity windows.\n\n• Your settings stay on this device.\n\n• Anonymous usage data helps improve the app."}
             </Text>
           </ScrollView>
 
@@ -87,11 +63,11 @@ export default function PrivacyConsentModal() {
             </Text>
           </Pressable>
 
-          <Text style={[styles.footnote, { color: T.sub }]}>
-            {isDE
-              ? "Vollständige Datenschutzerklärung: stromampel.de/datenschutz"
-              : "Full privacy policy: stromampel.de/privacy"}
-          </Text>
+          <Pressable onPress={() => Linking.openURL(isDE ? "https://stromampel.de/datenschutz" : "https://stromampel.de/privacy")}> 
+            <Text style={[styles.footnote, { color: T.sub }]}> 
+              {isDE ? "Datenschutzerklärung öffnen" : "Open privacy policy"}
+            </Text>
+          </Pressable>
         </View>
       </View>
     </Modal>
@@ -118,16 +94,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   scroll: {
-    maxHeight: 320,
+    maxHeight: 220,
     marginBottom: 20,
-  },
-  sectionHead: {
-    fontSize: 12,
-    fontWeight: "700",
-    marginTop: 14,
-    marginBottom: 5,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
   },
   body: {
     fontSize: 13,
@@ -146,8 +114,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   footnote: {
-    fontSize: 10,
+    fontSize: 11,
     textAlign: "center",
-    opacity: 0.5,
+    opacity: 0.75,
+    textDecorationLine: "underline",
   },
 });

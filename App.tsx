@@ -18,7 +18,6 @@ import HeroCard        from "./components/HeroCard";
 import TimelineBar     from "./components/TimelineBar";
 import SettingsSheet   from "./components/SettingsSheet";
 import NotifySheet     from "./components/NotifySheet";
-import SavingsScenarios from "./components/SavingsScenarios";
 import FeedbackSheet   from "./components/FeedbackSheet";
 import PrivacyConsentModal from "./components/PrivacyConsentModal";
 import { logAppOpen } from "./lib/analytics";
@@ -46,35 +45,6 @@ try {
   console.warn("[Notifications] setNotificationHandler skipped in Expo Go:", e);
 }
 
-/** Mini calendar-style date badge — dynamically shows weekday + day number.
- *  Used in section headers instead of static emojis. */
-function DateBadge({ date, color, locale }: { date: Date; color: string; locale: string }) {
-  const wd  = date.toLocaleDateString(locale, { weekday: "short" }).slice(0, 2).toUpperCase();
-  const day = date.getDate();
-  return (
-    <View style={{
-      width: 30, height: 30, borderRadius: 7,
-      overflow: "hidden", backgroundColor: color,
-      shadowColor: color, shadowOpacity: 0.45, shadowRadius: 4,
-      shadowOffset: { width: 0, height: 1 }, elevation: 3,
-    }}>
-      {/* Top strip — dark overlay acts as calendar binding */}
-      <View style={{ backgroundColor: "rgba(0,0,0,0.28)", alignItems: "center", paddingVertical: 3 }}>
-        <Text style={{ fontSize: 7, fontWeight: "900", color: "rgba(255,255,255,0.92)",
-                       letterSpacing: 0.8 }}>
-          {wd}
-        </Text>
-      </View>
-      {/* Day number */}
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-        <Text style={{ fontSize: 13, fontWeight: "900", color: "#fff", lineHeight: 15 }}>
-          {day}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 // ── Root wrapper ─────────────────────────────────────────────
 export default function App() {
   return (
@@ -95,9 +65,9 @@ function AppInner() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notifyOpen,   setNotifyOpen]   = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  // claimsRefreshKey removed — claim model replaced by SavingsScenarios
   // Shared timeline selection: only one bar active at a time
   const [activeBarSel, setActiveBarSel] = useState<{ barId: string; hour: number } | null>(null);
+  const [timelineDay, setTimelineDay] = useState<"today" | "tomorrow">("today");
   // OS-level notification permission state: null=not checked, true=ok, false=denied
   const [hasOsNotifPerm, setHasOsNotifPerm] = useState<boolean | null>(null);
   // langRef: keeps current language accessible inside stale useCallback closures
@@ -205,6 +175,13 @@ function AppInner() {
   }, []);
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!data?.tomorrow && timelineDay === "tomorrow") {
+      setTimelineDay("today");
+      setActiveBarSel(null);
+    }
+  }, [data?.tomorrow, timelineDay]);
 
   // Log app open (Firestore + native analytics)
   useEffect(() => { logAppOpen(); }, []);
@@ -321,8 +298,6 @@ function AppInner() {
     }
   }
 
-  // Claim / cancel functions removed — SavingsScenarios is purely passive
-
   // Keep langRef in sync with current settings language so stale useCallback
   // closures (e.g. load) can safely read the current language (ISSUE-3 fix).
   langRef.current = settings?.language ?? "de";
@@ -338,7 +313,6 @@ function AppInner() {
   const tomorrow = rawTomorrow;
 
   const nextCheap   = today?.nextCheapWindow ?? tomorrow?.cheapestWindow ?? null;
-  const cheapWindow = today?.nextCheapWindow ?? tomorrow?.cheapestWindow ?? null;
   const surchargeCt = settings?.surchargeCt ?? 23;
 
   // Theme tokens
@@ -347,19 +321,15 @@ function AppInner() {
   const lang   = settings?.language ?? "de";
   const i18n   = makeI18n(lang);
   const { t }  = i18n;
-  const locale = lang === "de" ? "de-DE" : "en-GB";
-
-  // cheapUntilHour removed — HeroCard v4 uses unified coreLabel from CheapWindow
-
-  // Tomorrow date label e.g. "26. Mär." / "26 Mar."
-  const tomorrowDate = (() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
-  })();
-  // Date objects for DateBadge
-  const todayDateObj    = new Date();
-  const tomorrowDateObj = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d; })();
+  const hasTomorrow = !!tomorrow;
+  const timelineData = timelineDay === "tomorrow" && tomorrow ? tomorrow : today;
+  const timelineBadge = timelineDay === "today"
+    ? today?.nextCheapWindow
+      ? `${t("cheapFrom")} ${today.nextCheapWindow.coreLabel}`
+      : null
+    : tomorrow?.cheapestWindow
+      ? `${t("best")} ${tomorrow.cheapestWindow.label} · ≈ ${(tomorrow.cheapestWindow.avgCt + surchargeCt).toFixed(1).replace(".", ",")} ct`
+      : null;
 
 
   // ── Loading state ─────────────────────────────────────────
@@ -463,122 +433,16 @@ function AppInner() {
             surchargeCt={surchargeCt}
           />
 
-          {/* ── Fixed tariff notice ───────────────────── */}
-          {settings?.tariffType === "fixed" && (() => {
-            // FOMO: compute avg spot vs current price (surcharge cancels out)
-            const allCts = today?.slots
-              .filter(s => s.priceCt !== null && !s.isPast)
-              .map(s => s.priceCt!) ?? [];
-            const avgCt = allCts.length > 0
-              ? allCts.reduce((a, b) => a + b, 0) / allCts.length
-              : null;
-            // Use cheapest remaining window as reference for max potential saving
-            const cheapRef = today?.nextCheapWindow?.coreAvgCt ?? today?.cheapestWindow?.coreAvgCt ?? null;
-            const diffCt = current?.priceCt != null && cheapRef != null
-              ? current.priceCt - cheapRef
-              : null;
-            const showFomo = diffCt !== null && diffCt > 3;
-
-            return (
-              <View style={[styles.card, styles.fixedNotice, { backgroundColor: T.card }]}>
-                <Text style={styles.fixedNoticeIcon}>🔒</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.fixedNoticeTitle, { color: "#dc2626" }]}>{t("fixedActive")}</Text>
-                  <Text style={[styles.fixedNoticeSub, { color: T.sub }]}>{t("fixedActiveSub")}</Text>
-                  {showFomo && (
-                    <Text style={[styles.fixedNoticeFomo, { color: "#b45309" }]}>
-                      {(lang === "en"
-                        ? `Today dynamic would be ≈${diffCt!.toFixed(1).replace(".", ",")} ct cheaper`
-                        : `Heute wäre Strom ≈${diffCt!.toFixed(1).replace(".", ",")} ct günstiger`)}
-                    </Text>
-                  )}
-                </View>
-              </View>
-            );
-          })()}
-
-          {/* ── Savings scenarios (passive hint, no interaction) ── */}
-          <SavingsScenarios
-            currentPriceCt={current?.priceCt ?? null}
-            nextCheap={nextCheap}
-            currentStatus={current?.status ?? "UNKNOWN"}
-            tariffType={settings?.tariffType ?? "dynamic"}
-          />
-
-          {/* ── Today (context) ───────────────────────── */}
-          {today && (
-            <Pressable
-              style={[styles.card, { backgroundColor: T.card }]}
-              onPress={() => setActiveBarSel(null)}
-            >
-              <View style={styles.sectionHeader}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                  <DateBadge date={todayDateObj} color="#16a34a" locale={locale} />
-                  <Text style={[styles.sectionTitle, { color: T.text }]}>{t("today")}</Text>
-                </View>
-                {today.nextCheapWindow && (
-                  <Text style={[styles.sectionBadge, { color: T.sub }]}>{t("cheapFrom")} {today.nextCheapWindow.coreLabel}</Text>
-                )}
-              </View>
-              <TimelineBar
-                slots={today.slots}
-                isToday={true}
-                activeHour={activeBarSel?.barId === "today" ? activeBarSel.hour : null}
-                onActiveHourChange={makeOnChange("today")}
-                surchargeCt={surchargeCt}
-              />
-            </Pressable>
-          )}
-
-          {/* ── Tomorrow ──────────────────────────────── */}
-          {tomorrow ? (
-            <Pressable
-              style={[styles.card, { backgroundColor: T.card }]}
-              onPress={() => setActiveBarSel(null)}
-            >
-              <View style={styles.sectionHeader}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                  <DateBadge date={tomorrowDateObj} color="#f59e0b" locale={locale} />
-                  <Text style={[styles.sectionTitle, { color: T.text }]}>{t("tomorrow")}</Text>
-                </View>
-                {tomorrow.cheapestWindow && (
-                  <Text style={[styles.sectionBadge, { color: T.sub }]}>
-                    {t("best")} {tomorrow.cheapestWindow.label} · ≈ {(tomorrow.cheapestWindow.avgCt + surchargeCt).toFixed(1).replace(".", ",")} ct
-                  </Text>
-                )}
-              </View>
-              <TimelineBar
-                slots={tomorrow.slots}
-                isToday={false}
-                activeHour={activeBarSel?.barId === "tomorrow" ? activeBarSel.hour : null}
-                onActiveHourChange={makeOnChange("tomorrow")}
-                surchargeCt={surchargeCt}
-              />
-            </Pressable>
-          ) : (
-            <View style={[styles.card, styles.tomorrowPlaceholder, { backgroundColor: T.card }]}>
-              <DateBadge date={tomorrowDateObj} color="#f59e0b" locale={locale} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.sectionTitle, { color: T.text }]}>{t("tomorrow")}</Text>
-                <Text style={[styles.tomorrowPlaceholderText, { color: T.sub }]}>{t("tomorrowPending")}</Text>
-                <Text style={[styles.tomorrowPlaceholderHint, { color: T.footer }]}>{t("tomorrowAuto")}</Text>
-              </View>
-            </View>
-          )}
-
           {/* ── Notify CTA ───────────────────────────── */}
-          <View style={[styles.card, styles.notifyRow, { backgroundColor: T.card }]}>
+          <View style={[styles.card, styles.notifyRow, { backgroundColor: T.card }]}> 
             {settings?.notifyActive ? (() => {
-              // ── Compute next trigger time from scheduled windows ──
               const isOnce = settings.notifyMode === "once";
               const timingMin: number = settings.timing ?? 0;
 
-              // Next fire epoch
               let nextFireMs: number | null = null;
               if (isOnce && settings.notifyFireAt && settings.notifyFireAt > Date.now()) {
                 nextFireMs = settings.notifyFireAt;
               } else if (!isOnce) {
-                // daily_smart: derive from today's or tomorrow's core block start
                 const todayCore = today?.nextCheapWindow ?? today?.cheapestWindow ?? null;
                 const tomorrowCore = tomorrow?.cheapestWindow ?? null;
                 const now = new Date();
@@ -594,7 +458,6 @@ function AppInner() {
                 }
               }
 
-              // Format next fire time for display
               const nextFireLabel = (() => {
                 if (!nextFireMs) return null;
                 const fireDate = new Date(nextFireMs);
@@ -607,7 +470,6 @@ function AppInner() {
                 return `${dayLabel} ${hh}:${mm}`;
               })();
 
-              // Mode + timing chip text
               const modeChip = isOnce
                 ? (lang === "en" ? "One-time" : "Einmalig")
                 : (lang === "en" ? "Daily" : "Täglich");
@@ -619,7 +481,6 @@ function AppInner() {
 
               return (
                 <>
-                  {/* Left: icon + compact label stack */}
                   <Text style={styles.notifyIcon}>🔔</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.notifyModeLine, { color: T.text }]}>
@@ -632,7 +493,6 @@ function AppInner() {
                       )}
                     </Text>
                   </View>
-                  {/* Right: action links */}
                   <Pressable onPress={() => setNotifyOpen(true)} hitSlop={8}>
                     <Text style={[styles.notifyEdit, { color: T.sub }]}>{t("notifyChange")}</Text>
                   </Pressable>
@@ -676,6 +536,70 @@ function AppInner() {
             )}
           </View>
 
+          {/* ── Fixed tariff notice ───────────────────── */}
+          {settings?.tariffType === "fixed" && (
+            <View style={[styles.card, styles.fixedNotice, { backgroundColor: T.card }]}>
+              <Text style={styles.fixedNoticeIcon}>🔒</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.fixedNoticeTitle, { color: T.text }]}>{t("fixedActive")}</Text>
+                <Text style={[styles.fixedNoticeSub, { color: T.sub }]}>{t("fixedActiveSub")}</Text>
+              </View>
+            </View>
+          )}
+
+          {/* ── Timeline ─────────────────────────────── */}
+          {timelineData && (
+            <Pressable
+              style={[styles.card, { backgroundColor: T.card }]}
+              onPress={() => setActiveBarSel(null)}
+            >
+              <View style={styles.sectionHeader}>
+                <View style={styles.sectionTabs}>
+                  <Pressable
+                    style={[styles.sectionTab, timelineDay === "today" && [styles.sectionTabActive, { backgroundColor: T.bg }]]}
+                    onPress={() => {
+                      setTimelineDay("today");
+                      setActiveBarSel(null);
+                    }}
+                  >
+                    <Text style={[styles.sectionTabText, { color: timelineDay === "today" ? T.text : T.sub }]}>
+                      {t("today")}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.sectionTab,
+                      timelineDay === "tomorrow" && [styles.sectionTabActive, { backgroundColor: T.bg }],
+                      !hasTomorrow && styles.sectionTabDisabled,
+                    ]}
+                    disabled={!hasTomorrow}
+                    onPress={() => {
+                      setTimelineDay("tomorrow");
+                      setActiveBarSel(null);
+                    }}
+                  >
+                    <Text style={[styles.sectionTabText, { color: timelineDay === "tomorrow" ? T.text : T.sub }]}>
+                      {t("tomorrow")}
+                    </Text>
+                  </Pressable>
+                </View>
+                {timelineBadge && (
+                  <Text style={[styles.sectionBadge, { color: T.sub }]}>{timelineBadge}</Text>
+                )}
+              </View>
+              {!hasTomorrow && timelineDay === "today" && (
+                <Text style={[styles.timelineHint, { color: T.sub }]}>{t("tomorrowPending")}</Text>
+              )}
+              <TimelineBar
+                slots={timelineData.slots}
+                isToday={timelineDay === "today"}
+                activeHour={activeBarSel?.barId === timelineDay ? activeBarSel.hour : null}
+                onActiveHourChange={makeOnChange(timelineDay)}
+                surchargeCt={surchargeCt}
+              />
+            </Pressable>
+          )}
+
           {/* ── Footer ────────────────────────────────── */}
           <View style={styles.footerSection}>
             <Text style={[styles.footerAttrib, { color: T.footer }]}>
@@ -704,14 +628,10 @@ function AppInner() {
           visible={notifyOpen}
           onClose={() => setNotifyOpen(false)}
           onActivate={handleNotifyActivate}
-          todaySlots={today?.slots ?? []}
           todayCheapestWindow={today?.cheapestWindow ?? null}
           todayNextCheapWindow={today?.nextCheapWindow ?? null}
-          tomorrowSlots={tomorrow?.slots ?? null}
           tomorrowCheapestWindow={tomorrow?.cheapestWindow ?? null}
-          initialMode={settings?.notifyMode}
           initialTiming={settings?.timing}
-          surchargeCt={surchargeCt}
         />
 
         <FeedbackSheet
@@ -730,30 +650,36 @@ function AppInner() {
 
 const styles = StyleSheet.create({
   root:            { flex: 1 },
-  scroll:          { padding: 14, paddingBottom: 24 },
+  scroll:          { padding: 12, paddingBottom: 22 },
   centered:        { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   loadingText:     { marginTop: 12, fontSize: 13, opacity: 0.7 },
   errorText:       { color: "#dc2626", fontSize: 13, textAlign: "center", marginBottom: 16 },
   retryBtn:        { backgroundColor: "#111827", paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10 },
   retryText:       { color: "#fff", fontWeight: "600", fontSize: 14 },
-  header:          { flexDirection: "row", alignItems: "center", paddingTop: 6, paddingBottom: 12 },
+  header:          { flexDirection: "row", alignItems: "center", paddingTop: 4, paddingBottom: 10 },
   headerLeft:      { width: 44 },
   headerCenter:    { flex: 1, alignItems: "center" },
   headerRight:     { width: 44, alignItems: "flex-end" },
-  appTitle:        { fontSize: 20, fontWeight: "700" },
-  appSub:          { fontSize: 13, marginTop: 1, opacity: 0.6 },
+  appTitle:        { fontSize: 19, fontWeight: "700" },
+  appSub:          { fontSize: 12, marginTop: 1, opacity: 0.58 },
   anbieterBadge:   { fontSize: 10, marginTop: 3, paddingHorizontal: 8, paddingVertical: 2,
                      borderRadius: 10, backgroundColor: "#f0fdf4", color: "#15803d" },
   gearBtn:         { padding: 4 },
   gearIcon:        { fontSize: 19 },
   card:            {
-    borderRadius: 14, padding: 16, marginTop: 10,
+    borderRadius: 14, padding: 14, marginTop: 8,
     shadowColor: "#000", shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04, shadowRadius: 3, elevation: 1,
   },
-  sectionHeader:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
+  sectionHeader:   { gap: 8, marginBottom: 6 },
   sectionTitle:    { fontSize: 14, fontWeight: "600" },
   sectionBadge:    { fontSize: 11, opacity: 0.65 },
+  sectionTabs:     { flexDirection: "row", gap: 8 },
+  sectionTab:      { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999 },
+  sectionTabActive:{},
+  sectionTabDisabled: { opacity: 0.4 },
+  sectionTabText:  { fontSize: 12, fontWeight: "600" },
+  timelineHint:    { fontSize: 11, marginBottom: 8, opacity: 0.7 },
   // Notify row — compact single-line
   notifyRow:       { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9 },
   notifyIcon:      { fontSize: 13, opacity: 0.75 },
@@ -772,17 +698,12 @@ const styles = StyleSheet.create({
   footerAttrib:    { fontSize: 9, textAlign: "center", lineHeight: 13 },
   footerDivider:   { height: StyleSheet.hairlineWidth, width: "20%", opacity: 0.2 },
   feedbackLink:    { fontSize: 10, textDecorationLine: "underline", opacity: 0.6 },
-  tomorrowPlaceholder:    { flexDirection: "row", alignItems: "center", gap: 14 },
-  tomorrowPlaceholderIcon:{ fontSize: 28 },
-  tomorrowPlaceholderText:{ fontSize: 11, marginTop: 4, lineHeight: 16, opacity: 0.7 },
-  tomorrowPlaceholderHint:{ fontSize: 10, marginTop: 4, fontStyle: "italic", opacity: 0.5 },
   // Fixed tariff top notice
   fixedNotice:      { flexDirection: "row", alignItems: "center", gap: 12,
-                      borderWidth: 1, borderColor: "#f59e0b" },
+                      borderWidth: 1, borderColor: "#e5e7eb" },
   fixedNoticeIcon:  { fontSize: 18, opacity: 0.85 },
   fixedNoticeTitle: { fontSize: 12, fontWeight: "600" },
   fixedNoticeSub:   { fontSize: 10, marginTop: 2, lineHeight: 14, opacity: 0.7 },
-  fixedNoticeFomo:  { fontSize: 10, marginTop: 3, fontWeight: "600", lineHeight: 14 },
   // Permission banner — pinned above ScrollView, amber warning style
   permissionBanner: {
     backgroundColor: "#b45309",
@@ -799,4 +720,3 @@ const styles = StyleSheet.create({
   },
 
 });
-
