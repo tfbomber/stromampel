@@ -628,10 +628,14 @@ function AppInner() {
           visible={notifyOpen}
           onClose={() => setNotifyOpen(false)}
           onActivate={handleNotifyActivate}
+          todaySlots={today?.slots ?? []}
+          tomorrowSlots={tomorrow?.slots ?? null}
           todayCheapestWindow={today?.cheapestWindow ?? null}
           todayNextCheapWindow={today?.nextCheapWindow ?? null}
           tomorrowCheapestWindow={tomorrow?.cheapestWindow ?? null}
+          initialMode={settings?.notifyMode}
           initialTiming={settings?.timing}
+          surchargeCt={surchargeCt}
         />
 
         <FeedbackSheet
@@ -650,7 +654,7 @@ function AppInner() {
 
 const styles = StyleSheet.create({
   root:            { flex: 1 },
-  scroll:          { padding: 12, paddingBottom: 22 },
+  scroll:          { flexGrow: 1, padding: 12, paddingBottom: 22 },
   centered:        { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   loadingText:     { marginTop: 12, fontSize: 13, opacity: 0.7 },
   errorText:       { color: "#dc2626", fontSize: 13, textAlign: "center", marginBottom: 16 },
@@ -694,7 +698,7 @@ const styles = StyleSheet.create({
                      borderWidth: 1, alignItems: "center" },
   notifyBtnText:   { fontWeight: "500", fontSize: 11 },
   // Footer
-  footerSection:   { marginTop: 16, alignItems: "center", gap: 5 },
+  footerSection:   { marginTop: "auto", alignItems: "center", gap: 5, paddingTop: 16 },
   footerAttrib:    { fontSize: 9, textAlign: "center", lineHeight: 13 },
   footerDivider:   { height: StyleSheet.hairlineWidth, width: "20%", opacity: 0.2 },
   feedbackLink:    { fontSize: 10, textDecorationLine: "underline", opacity: 0.6 },
