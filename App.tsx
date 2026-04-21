@@ -18,6 +18,7 @@ import HeroCard        from "./components/HeroCard";
 import TimelineBar     from "./components/TimelineBar";
 import SettingsSheet   from "./components/SettingsSheet";
 import NotifySheet     from "./components/NotifySheet";
+import SavingsScenarios from "./components/SavingsScenarios";
 import FeedbackSheet   from "./components/FeedbackSheet";
 import PrivacyConsentModal from "./components/PrivacyConsentModal";
 import { logAppOpen } from "./lib/analytics";
@@ -426,12 +427,22 @@ function AppInner() {
             </View>
           </View>
 
-          {/* ── Hero ──────────────────────────────────── */}
+          {/* ── Hero ─────────────────────────────────────────── */}
           <HeroCard
             current={current}
             nextCheap={nextCheap}
             surchargeCt={surchargeCt}
           />
+
+          {/* ── Savings hint (YELLOW / RED only) ──────────────── */}
+          {settings?.tariffType !== "fixed" && (
+            <SavingsScenarios
+              currentPriceCt={current?.priceCt ?? null}
+              nextCheap={nextCheap}
+              currentStatus={current?.status ?? "UNKNOWN"}
+              tariffType={settings?.tariffType ?? "dynamic"}
+            />
+          )}
 
           {/* ── Notify CTA ───────────────────────────── */}
           <View style={[styles.card, styles.notifyRow, { backgroundColor: T.card }]}> 

@@ -34,9 +34,9 @@ const SCENARIOS = [
     emoji:    "🚗",
     labelDe:  "E-Auto Laden",
     labelEn:  "EV Charging",
-    detailDe: "Ca. 15 kWh Ladung",
-    detailEn: "Approx. 15 kWh charge",
-    kWh:      15.0,
+    detailDe: "Ca. 20 kWh Ladung",
+    detailEn: "Approx. 20 kWh charge",
+    kWh:      20.0,
   },
 ] as const;
 
@@ -80,29 +80,8 @@ export default function SavingsScenarios({
   // No price data yet
   if (currentStatus === "UNKNOWN" || currentPriceCt === null) return null;
 
-  const isGreen = currentStatus === "GREEN";
-
-  // ── GREEN: positive banner, no diff needed ───────────────
-  if (isGreen) {
-    return (
-      <View style={[styles.card, { backgroundColor: T.card, overflow: "hidden" }]}>
-        <View style={styles.greenAccent} />
-        <View style={styles.greenBanner}>
-          <Text style={styles.bigEmoji}>⚡</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.bannerTitle, { color: "#15803d" }]}>
-              {lang === "en" ? "Great time to use power!" : "Jetzt günstiger Strom!"}
-            </Text>
-            <Text style={[styles.bannerSub, { color: T.sub }]}>
-              {lang === "en"
-                ? "Good moment for laundry, dishwasher or EV charging."
-                : "Guter Zeitpunkt für Waschen, Spülmaschine oder E-Auto."}
-            </Text>
-          </View>
-        </View>
-      </View>
-    );
-  }
+  // GREEN: HeroCard already signals cheapest period — no redundant card needed
+  if (currentStatus === "GREEN") return null;
 
   // ── YELLOW / RED ─────────────────────────────────────────
   // No upcoming cheap window
