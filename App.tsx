@@ -26,7 +26,14 @@ import { logAppOpen } from "./lib/analytics";
 import { fetchAppData }                          from "./lib/fetcher";
 import { loadSettings, saveSettings }            from "./lib/settings";
 // lib/savings claim functions no longer used (claim model removed)
-import { scheduleAllUpcomingNotifications, ensureAndroidChannel, checkExactAlarmPermission } from "./lib/notifications";
+import {
+  scheduleAllUpcomingNotifications,
+  ensureAndroidChannel,
+  checkExactAlarmPermission,
+  clearAllScheduledNotifications,
+  getNotificationPreview,
+  scheduleTestNotification,
+} from "./lib/notifications";
 import type { AppData }                          from "./lib/types";
 import type { AppSettings, Timing, NotifyMode }  from "./lib/settings";
 import { ThemeContext, LIGHT, DARK }             from "./lib/theme";
@@ -53,6 +60,24 @@ export default function App() {
       <AppInner />
     </SafeAreaProvider>
   );
+}
+
+function formatNotifyTime(epochMs: number | null, lang: "de" | "en"): string | null {
+  if (!epochMs) return null;
+  const date = new Date(epochMs);
+  const hh = date.getHours().toString().padStart(2, "0");
+  const mm = date.getMinutes().toString().padStart(2, "0");
+  const isToday = new Date().toDateString() === date.toDateString();
+  const dayLabel = isToday
+    ? (lang === "en" ? "Today" : "Heute")
+    : (lang === "en" ? "Tomorrow" : "Morgen");
+  return `${dayLabel} ${hh}:${mm}`;
+}
+
+function formatTimingChip(timingMin: number, lang: "de" | "en"): string {
+  if (timingMin === 0) return lang === "en" ? "on start" : "bei Start";
+  if (timingMin === 30) return "30 Min.";
+  return lang === "en" ? "1 hr" : "1 Std.";
 }
 
 
@@ -229,21 +254,25 @@ function AppInner() {
 
 
   // ── Settings updates ──────────────────────────────────────
+  // NOTE: We use a functional read of the current persisted state to avoid
+  // stale-closure races between this handler and the once-mode reset in load().
+  // Side effects (AsyncStorage write) must NOT live inside the setSettings updater —
+  // React can invoke updaters multiple times in Strict Mode.
   async function handleSettingsChange(patch: Partial<AppSettings>) {
-    const next = { ...(settings ?? {}), ...patch } as AppSettings;
+    const { loadSettings: ls, saveSettings: ss } = await import("./lib/settings");
+    const current = await ls();
+    const next = { ...current, ...patch } as AppSettings;
+    await ss(next);
     setSettings(next);
-    // Save the FULL merged object — do NOT rely on saveSettings's internal re-read
-    // which can lose fields under Expo Go async timing
-    try {
-      const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
-      await AsyncStorage.setItem("sa_settings_v1", JSON.stringify(next));
-    } catch { /* ignore */ }
   }
 
   // ── Notify activation ─────────────────────────────────────────
   async function handleNotifyActivate(mode: NotifyMode, timing: Timing, fireAtEpoch?: number) {
     // Haptic: celebrate successful notification activation
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    const preview = data
+      ? getNotificationPreview(data, mode, timing, fireAtEpoch)
+      : null;
     await handleSettingsChange({
       notifyActive: true,
       notifyMode:   mode,
@@ -251,12 +280,65 @@ function AppInner() {
       notifyFireAt: fireAtEpoch,
     });
     if (data) {
-      scheduleAllUpcomingNotifications(
+      await scheduleAllUpcomingNotifications(
         data, mode, timing, settings?.language ?? "de", fireAtEpoch, surchargeCt,
         true,  // forceSchedule: explicit user activation — bypass imminent-alarm Guard
       ).catch((e) => console.error("[App] handleNotifyActivate scheduling failed:", e));
     }
+    if (preview?.nextPreciseAt) {
+      Alert.alert(
+        lang === "en" ? "Reminder active" : "Erinnerung aktiv",
+        preview.nextPreciseQuietHours === "clamped"
+          ? (lang === "en"
+              ? `Next reminder: ${formatNotifyTime(preview.nextPreciseAt, lang)}. Quiet hours move early alerts to 07:00.`
+              : `Nächste Erinnerung: ${formatNotifyTime(preview.nextPreciseAt, lang)}. Frühe Erinnerungen werden wegen Ruhezeiten auf 07:00 verschoben.`)
+          : (lang === "en"
+              ? `Next reminder: ${formatNotifyTime(preview.nextPreciseAt, lang)}.`
+              : `Nächste Erinnerung: ${formatNotifyTime(preview.nextPreciseAt, lang)}.`),
+      );
+    } else if (preview?.nextFallbackAt) {
+      Alert.alert(
+        lang === "en" ? "Reminder active" : "Erinnerung aktiv",
+        lang === "en"
+          ? `No exact cheap window is scheduled yet. Backup reminder: ${formatNotifyTime(preview.nextFallbackAt, lang)}.`
+          : `Noch kein genauer Spot-Alarm geplant. Backup-Erinnerung: ${formatNotifyTime(preview.nextFallbackAt, lang)}.`,
+      );
+    }
     showBatteryOptimizationPromptOnce(settings?.language ?? "de");
+  }
+
+  async function handleNotifyDeactivate() {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    await clearAllScheduledNotifications();
+    await handleSettingsChange({ notifyActive: false, notifyFireAt: undefined });
+    setHasOsNotifPerm(null);
+    Alert.alert(
+      lang === "en" ? "Reminders off" : "Erinnerungen aus",
+      lang === "en" ? "All scheduled reminders were removed." : "Alle geplanten Erinnerungen wurden entfernt.",
+    );
+  }
+
+  async function handleSendTestNotification() {
+    const ok = await scheduleTestNotification(lang);
+    if (ok) {
+      Alert.alert(
+        lang === "en" ? "Test scheduled" : "Test geplant",
+        lang === "en"
+          ? "You should receive a test notification in about 5 seconds."
+          : "Du solltest in etwa 5 Sekunden eine Test-Benachrichtigung erhalten.",
+      );
+      return;
+    }
+    Alert.alert(
+      lang === "en" ? "Notifications blocked" : "Benachrichtigungen blockiert",
+      lang === "en"
+        ? "Enable notifications in Android settings first."
+        : "Aktiviere zuerst Benachrichtigungen in den Android-Einstellungen.",
+      [
+        { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
+        { text: lang === "en" ? "Open Settings" : "Einstellungen", onPress: () => Linking.openSettings() },
+      ]
+    );
   }
 
   /** Show a one-time Alert guiding the user to disable battery optimisation.
@@ -324,6 +406,33 @@ function AppInner() {
   const { t }  = i18n;
   const hasTomorrow = !!tomorrow;
   const timelineData = timelineDay === "tomorrow" && tomorrow ? tomorrow : today;
+  const notifyPreview = settings?.notifyActive && data
+    ? getNotificationPreview(data, settings.notifyMode ?? "daily_smart", settings.timing, settings.notifyFireAt)
+    : null;
+  const nextFireLabel = formatNotifyTime(notifyPreview?.nextPreciseAt ?? null, lang);
+  const fallbackFireLabel = formatNotifyTime(notifyPreview?.nextFallbackAt ?? null, lang);
+  const notifyStatusText = !settings?.notifyActive
+    ? null
+    : hasOsNotifPerm === false
+      ? (lang === "en" ? "System notifications are blocked." : "System-Benachrichtigungen sind blockiert.")
+      : notifyPreview?.nextPreciseAt
+        ? notifyPreview.nextPreciseQuietHours === "clamped"
+          ? (lang === "en" ? "Quiet hours move this alert to 07:00." : "Ruhezeiten verschieben diese Erinnerung auf 07:00.")
+          : (lang === "en" ? "Next reminder confirmed." : "Nächste Erinnerung bestätigt.")
+        : notifyPreview?.fallbackOnly && fallbackFireLabel
+          ? (lang === "en"
+              ? `No exact slot yet - backup at ${fallbackFireLabel}.`
+              : `Noch kein genauer Slot - Backup um ${fallbackFireLabel}.`)
+          : notifyPreview?.noPreciseReason === "quiet_hours"
+            ? (lang === "en" ? "Late-night reminders after 22:00 are skipped." : "Späte Erinnerungen nach 22:00 werden ausgelassen.")
+            : (lang === "en" ? "Waiting for the next price-based reminder." : "Warte auf die nächste preisbasierte Erinnerung.");
+  const notifyMetaText = !settings?.notifyActive
+    ? null
+    : Platform.OS === "android"
+      ? (lang === "en"
+          ? "Android battery saver can still delay alerts. Use Test notification in Settings if needed."
+          : "Android-Akkusparen kann Erinnerungen weiter verzögern. Nutze bei Bedarf Test-Benachrichtigung in den Einstellungen.")
+      : null;
   const timelineBadge = timelineDay === "today"
     ? today?.nextCheapWindow
       ? `${t("cheapFrom")} ${today.nextCheapWindow.coreLabel}`
@@ -450,45 +559,10 @@ function AppInner() {
               const isOnce = settings.notifyMode === "once";
               const timingMin: number = settings.timing ?? 0;
 
-              let nextFireMs: number | null = null;
-              if (isOnce && settings.notifyFireAt && settings.notifyFireAt > Date.now()) {
-                nextFireMs = settings.notifyFireAt;
-              } else if (!isOnce) {
-                const todayCore = today?.nextCheapWindow ?? today?.cheapestWindow ?? null;
-                const tomorrowCore = tomorrow?.cheapestWindow ?? null;
-                const now = new Date();
-                if (todayCore && todayCore.coreStartHour > now.getHours()) {
-                  const d = new Date(); d.setHours(todayCore.coreStartHour, 0, 0, 0);
-                  const fire = d.getTime() - timingMin * 60_000;
-                  if (fire > Date.now()) nextFireMs = fire;
-                }
-                if (!nextFireMs && tomorrowCore) {
-                  const d = new Date(); d.setDate(d.getDate() + 1);
-                  d.setHours(tomorrowCore.coreStartHour, 0, 0, 0);
-                  nextFireMs = d.getTime() - timingMin * 60_000;
-                }
-              }
-
-              const nextFireLabel = (() => {
-                if (!nextFireMs) return null;
-                const fireDate = new Date(nextFireMs);
-                const hh = fireDate.getHours().toString().padStart(2, "0");
-                const mm = fireDate.getMinutes().toString().padStart(2, "0");
-                const isToday = new Date().toDateString() === fireDate.toDateString();
-                const dayLabel = isToday
-                  ? (lang === "en" ? "Today" : "Heute")
-                  : (lang === "en" ? "Tomorrow" : "Morgen");
-                return `${dayLabel} ${hh}:${mm}`;
-              })();
-
               const modeChip = isOnce
                 ? (lang === "en" ? "One-time" : "Einmalig")
                 : (lang === "en" ? "Daily" : "Täglich");
-              const timingChip = timingMin === 0
-                ? (lang === "en" ? "on start" : "bei Start")
-                : timingMin === 30
-                  ? "30 Min."
-                  : (lang === "en" ? "1 hr" : "1 Std.");
+              const timingChip = formatTimingChip(timingMin, lang);
 
               return (
                 <>
@@ -503,14 +577,19 @@ function AppInner() {
                         </Text>
                       )}
                     </Text>
+                    {!!notifyStatusText && (
+                      <Text style={[styles.notifyStatusLine, { color: hasOsNotifPerm === false ? "#b45309" : T.sub }]}>
+                        {notifyStatusText}
+                      </Text>
+                    )}
+                    {!!notifyMetaText && (
+                      <Text style={[styles.notifyMetaLine, { color: T.sub }]}>{notifyMetaText}</Text>
+                    )}
                   </View>
                   <Pressable onPress={() => setNotifyOpen(true)} hitSlop={8}>
                     <Text style={[styles.notifyEdit, { color: T.sub }]}>{t("notifyChange")}</Text>
                   </Pressable>
-                  <Pressable onPress={() => {
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                    handleSettingsChange({ notifyActive: false });
-                  }} hitSlop={8}>
+                  <Pressable onPress={handleNotifyDeactivate} hitSlop={8}>
                     <Text style={styles.notifyDisable}>{t("notifyOff")}</Text>
                   </Pressable>
                 </>
@@ -632,6 +711,7 @@ function AppInner() {
             settings={settings}
             onClose={() => setSettingsOpen(false)}
             onChange={handleSettingsChange}
+            onSendTestNotification={handleSendTestNotification}
           />
         )}
 
@@ -699,6 +779,8 @@ const styles = StyleSheet.create({
   notifyRow:       { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9 },
   notifyIcon:      { fontSize: 13, opacity: 0.75 },
   notifyModeLine:  { fontSize: 12, fontWeight: "600", lineHeight: 16 },
+  notifyStatusLine:{ fontSize: 11, marginTop: 3, lineHeight: 15 },
+  notifyMetaLine:  { fontSize: 10, marginTop: 2, lineHeight: 14, opacity: 0.72 },
   notifyActive:    { fontSize: 12, fontWeight: "600" },      // kept for any fallback refs
   notifySchedule:  { fontSize: 11, marginTop: 2, opacity: 0.65 },  // kept
   notifyEdit:      { fontSize: 11, textDecorationLine: "underline", opacity: 0.65 },

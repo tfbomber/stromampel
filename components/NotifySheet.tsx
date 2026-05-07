@@ -6,9 +6,10 @@ import {
 import * as Notifications from "expo-notifications";
 import * as Haptics from "expo-haptics";
 import type { Timing, NotifyMode } from "../lib/settings";
-import type { HourSlot, CheapWindow } from "../lib/types";
+import type { HourSlot, CheapWindow, AppData } from "../lib/types";
 import { useTheme } from "../lib/theme";
 import { useI18n } from "../lib/i18n";
+import { getNotificationPreview } from "../lib/notifications";
 import TimelineBar from "./TimelineBar";
 
 interface Props {
@@ -62,13 +63,16 @@ export default function NotifySheet({
     (nowHour + 1);
   const tomorrowCheapHour = tomorrowCheapestWindow?.coreStartHour ?? tomorrowFull[0]?.hour ?? 10;
 
+  const prevVisible = useRef(false);
+
   useEffect(() => {
-    if (visible) {
+    if (visible && !prevVisible.current) {
       setMode(initialMode ?? "daily_smart");
       setSelectedDay("today");
       setSelectedHour(todayCheapHour);
       setTiming(initialTiming ?? 30);
     }
+    prevVisible.current = visible;
   }, [visible, initialMode, initialTiming, todayCheapHour]);
 
   useEffect(() => {
@@ -102,11 +106,43 @@ export default function NotifySheet({
   const fireLabel = `${fireDayLabel}${pad2(fireAtDate.getHours())}:${pad2(fireAtDate.getMinutes())} Uhr`;
 
   const smartWindow = todayNextCheapWindow ?? todayCheapestWindow ?? tomorrowCheapestWindow ?? null;
-  const smartLabel = smartWindow
-    ? smartWindow.date === "tomorrow"
-      ? (lang === "en" ? `Tomorrow · ${smartWindow.coreLabel}` : `Morgen · ${smartWindow.coreLabel}`)
-      : smartWindow.coreLabel
-    : null;
+  const previewData: AppData = {
+    current: null,
+    today: {
+      slots: todaySlots,
+      cheapestWindow: todayCheapestWindow,
+      nextCheapWindow: todayNextCheapWindow,
+    },
+    tomorrow: tomorrowSlots
+      ? {
+          slots: tomorrowSlots,
+          cheapestWindow: tomorrowCheapestWindow,
+          nextCheapWindow: null,
+        }
+      : null,
+  };
+  const preview = getNotificationPreview(
+    previewData,
+    mode,
+    timing,
+    mode === "once" ? fireAtDate.getTime() : undefined,
+  );
+  const formatPreviewTime = (epochMs: number | null) => {
+    if (!epochMs) return null;
+    const date = new Date(epochMs);
+    const hh = pad2(date.getHours());
+    const mm = pad2(date.getMinutes());
+    const isToday = new Date().toDateString() === date.toDateString();
+    const dayLabel = isToday ? (lang === "en" ? "Today" : "Heute") : (lang === "en" ? "Tomorrow" : "Morgen");
+    return `${dayLabel} ${hh}:${mm}`;
+  };
+  const smartLabel = preview.nextPreciseLabel
+    ? `${preview.nextPreciseLabel} · ${formatPreviewTime(preview.nextPreciseAt)}`
+    : smartWindow
+      ? smartWindow.date === "tomorrow"
+        ? (lang === "en" ? `Tomorrow · ${smartWindow.coreLabel}` : `Morgen · ${smartWindow.coreLabel}`)
+        : smartWindow.coreLabel
+      : null;
 
   const barSlots  = selectedDay === "today" ? todaySlots : (tomorrowSlots ?? []);
   const cheapHour = selectedDay === "today" ? todayCheapHour : tomorrowCheapHour;
@@ -183,7 +219,7 @@ export default function NotifySheet({
   }
 
   const DARK_BTN = "#111827";
-  const ctaDisabled = mode === "once" && !fireAtValid;
+  const ctaDisabled = mode === "once" && (!fireAtValid || preview.noPreciseReason === "quiet_hours");
 
   return (
     <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>
@@ -237,9 +273,28 @@ export default function NotifySheet({
               </Text>
               <Text style={[styles.previewText, { color: T.sub }]}> 
                 {smartLabel
-                  ? (lang === "en" ? `Next likely window: ${smartLabel}` : `Nächste wahrscheinliche Phase: ${smartLabel}`)
+                  ? (lang === "en" ? `Next confirmed reminder: ${smartLabel}` : `Nächste bestätigte Erinnerung: ${smartLabel}`)
                   : (lang === "en" ? "The app checks the next cheap window automatically." : "Die App prüft automatisch die nächste günstige Phase.")}
               </Text>
+              <Text style={[styles.previewNote, { color: T.sub }]}>
+                {lang === "en"
+                  ? "Precise daily reminders refresh when you reopen the app. Later days stay covered by a 07:00 backup reminder."
+                  : "Genaue tägliche Erinnerungen aktualisieren sich beim erneuten Öffnen der App. Spätere Tage bleiben per 07:00-Backup abgedeckt."}
+              </Text>
+              {preview.nextPreciseQuietHours === "clamped" && (
+                <Text style={[styles.previewNote, { color: "#b45309" }]}>
+                  {lang === "en"
+                    ? "Quiet hours move this reminder to 07:00."
+                    : "Ruhezeiten verschieben diese Erinnerung auf 07:00."}
+                </Text>
+              )}
+              {preview.noPreciseReason === "quiet_hours" && (
+                <Text style={[styles.previewNote, { color: "#b45309" }]}>
+                  {lang === "en"
+                    ? "If the best window starts too late, no precise reminder is sent after 22:00."
+                    : "Wenn das beste Zeitfenster zu spät startet, wird nach 22:00 keine genaue Erinnerung gesendet."}
+                </Text>
+              )}
             </View>
           )}
 
@@ -335,9 +390,23 @@ export default function NotifySheet({
                   </Text>
                   <Text style={[styles.previewRow, { color: "#15803d", fontWeight: "700", marginVertical: 4 }]}>
                     {lang === "en"
-                      ? `🔔 Reminder at ${fireLabel}`
-                      : `🔔 Erinnerung um ${fireLabel}`}
+                      ? `🔔 Reminder at ${formatPreviewTime(preview.nextPreciseAt) ?? fireLabel}`
+                      : `🔔 Erinnerung um ${formatPreviewTime(preview.nextPreciseAt) ?? fireLabel}`}
                   </Text>
+                  {preview.nextPreciseQuietHours === "clamped" && (
+                    <Text style={[styles.previewNote, { color: "#b45309" }]}>
+                      {lang === "en"
+                        ? "Quiet hours move early reminders to 07:00."
+                        : "Ruhezeiten verschieben frühe Erinnerungen auf 07:00."}
+                    </Text>
+                  )}
+                  {preview.noPreciseReason === "quiet_hours" && (
+                    <Text style={[styles.previewNote, { color: "#dc2626" }]}>
+                      {lang === "en"
+                        ? "After 22:00 no reminder is sent. Choose an earlier hour or less lead time."
+                        : "Nach 22:00 wird keine Erinnerung gesendet. Wähle eine frühere Stunde oder weniger Vorlauf."}
+                    </Text>
+                  )}
                   <Text style={[styles.previewNote, { color: "#b45309" }]}>
                     {lang === "en" ? "⚠️ Fires once then turns off automatically." : "⚠️ Einmalig – danach automatisch deaktiviert."}
                   </Text>

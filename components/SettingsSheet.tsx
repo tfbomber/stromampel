@@ -24,9 +24,10 @@ interface Props {
   settings: AppSettings;
   onClose:  () => void;
   onChange: (patch: Partial<AppSettings>) => void;
+  onSendTestNotification: () => void;
 }
 
-export default function SettingsSheet({ visible, settings, onClose, onChange }: Props) {
+export default function SettingsSheet({ visible, settings, onClose, onChange, onSendTestNotification }: Props) {
   const T = useTheme();
   const { t, lang } = useI18n();
   const slideAnim = useRef(new Animated.Value(300)).current;
@@ -198,12 +199,32 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
                 style={[styles.troubleCard, { borderColor: T.inputBorder, backgroundColor: T.bg }]}
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  onSendTestNotification();
+                }}
+              >
+                <Text style={styles.troubleEmoji}>🔔</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.troubleTitle, { color: T.text }]}>
+                    {lang === "en" ? "Test Notification" : "Test-Benachrichtigung"}
+                  </Text>
+                  <Text style={[styles.troubleSub, { color: T.sub }]}>
+                    {lang === "en"
+                      ? "Sends one in about 5 seconds"
+                      : "Sendet eine in etwa 5 Sekunden"}
+                  </Text>
+                </View>
+              </Pressable>
+
+              <Pressable
+                style={[styles.troubleCard, { borderColor: T.inputBorder, backgroundColor: T.bg }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
                   import("react-native").then(({ Alert, Linking }) => {
                     Alert.alert(
                       lang === "en" ? "Notification Fixes" : "Benachrichtigungs-Hilfe",
                       lang === "en"
-                        ? "Check notification permission and battery settings if reminders do not arrive."
-                        : "Prüfe Benachrichtigungsrechte und Akku-Einstellungen, falls Erinnerungen nicht ankommen.",
+                        ? "Check notification permission and battery settings if reminders do not arrive or arrive late."
+                        : "Prüfe Benachrichtigungsrechte und Akku-Einstellungen, falls Erinnerungen nicht ankommen oder verspätet sind.",
                       [
                         { text: lang === "en" ? "Cancel" : "Abbrechen", style: "cancel" },
                         { text: lang === "en" ? "Open Settings" : "Zu den Einstellungen", onPress: () => Linking.openSettings() }
@@ -219,8 +240,8 @@ export default function SettingsSheet({ visible, settings, onClose, onChange }: 
                   </Text>
                   <Text style={[styles.troubleSub, { color: T.sub }]}> 
                     {lang === "en"
-                      ? "Open system settings"
-                      : "Systemeinstellungen öffnen"}
+                      ? "Permissions and battery saver"
+                      : "Rechte und Akkusparen prüfen"}
                   </Text>
                 </View>
               </Pressable>
