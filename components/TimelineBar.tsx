@@ -44,12 +44,16 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
   const T           = useTheme();
   const { lang }    = useI18n();
   const barWidth    = useRef(0);
+  const containerRef = useRef<View>(null);
+  const containerPageX = useRef(0);
   const activeSlot  = slots.find((s) => s.hour === activeHour) ?? null;
   const activeIndex = slots.findIndex((s) => s.hour === activeHour);
 
   // Current hour — for "Jetzt" marker (today only)
-  const nowHour    = new Date().getHours();
-  const nowFraction = nowHour / 24;
+  const now = new Date();
+  const nowHour = now.getHours();
+  const nowMinute = now.getMinutes();
+  const nowFraction = (nowHour + nowMinute / 60) / 24;
 
   const onChangeRef = useRef(onActiveHourChange);
   useEffect(() => { onChangeRef.current = onActiveHourChange; }, [onActiveHourChange]);
@@ -137,18 +141,24 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
     return priceToGradientColor(ep, dayMin, dayMax, slot.status);
   }
 
-  const getHour = useCallback((x: number) => {
+  const getHourByPageX = useCallback((pageX: number) => {
+    const localX = pageX - containerPageX.current;
     const w = barWidth.current;
     if (w <= 0) return 0;
-    return Math.min(SLOTS - 1, Math.floor((Math.max(0, Math.min(x, w - 1)) / w) * SLOTS));
+    return Math.min(SLOTS - 1, Math.floor((Math.max(0, Math.min(localX, w - 1)) / w) * SLOTS));
   }, []);
 
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder:  (_, g) => Math.abs(g.dx) > Math.abs(g.dy) + 4,
-      onPanResponderGrant:    (e) => onChangeRef.current(getHour(e.nativeEvent.locationX)),
-      onPanResponderMove:     (e) => onChangeRef.current(getHour(e.nativeEvent.locationX)),
+      onPanResponderGrant:    (e, g) => {
+        containerRef.current?.measure((_x, _y, _w, _h, pX) => {
+          if (pX != null) containerPageX.current = pX;
+          onChangeRef.current(getHourByPageX(g.x0));
+        });
+      },
+      onPanResponderMove:     (e, g) => onChangeRef.current(getHourByPageX(g.moveX)),
       onPanResponderRelease:  () => onChangeRef.current(null),
       onPanResponderTerminate:() => onChangeRef.current(null),
     })
@@ -187,11 +197,19 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
 
       {/* Bar container with gesture */}
       <View
+        ref={containerRef}
         style={[styles.barContainer, {
           // Total physical height = CONTAINER_H + optional zero line
           height: CONTAINER_H + (hasMixed ? ZERO_LINE_H : 0),
         }]}
-        onLayout={(e: LayoutChangeEvent) => { barWidth.current = e.nativeEvent.layout.width; }}
+        onLayout={(e: LayoutChangeEvent) => {
+          barWidth.current = e.nativeEvent.layout.width;
+          setTimeout(() => {
+            containerRef.current?.measure((_x, _y, _w, _h, pX) => {
+              if (pX != null) containerPageX.current = pX;
+            });
+          }, 100);
+        }}
         {...pan.panHandlers}
       >
         {/* "Jetzt" vertical indicator — today only, absolute positioned */}
@@ -275,7 +293,7 @@ export default function TimelineBar({ slots, isToday, activeHour, onActiveHourCh
           <Text key={h} style={[styles.hourLabel, {
             color: T.sub,
             position: "absolute",
-            left: `${(h / 23) * 100}%` as unknown as number,
+            left: `${((h + 0.5) / 24) * 100}%` as unknown as number,
           }]}>
             {h}
           </Text>
@@ -321,5 +339,5 @@ const styles = StyleSheet.create({
     opacity:   0.6,
   },
   labelsRow: { height: 16, position: "relative", marginTop: 3 },
-  hourLabel: { fontSize: 10, transform: [{ translateX: -4 }] },
+  hourLabel: { fontSize: 10, transform: [{ translateX: -6 }] },
 });

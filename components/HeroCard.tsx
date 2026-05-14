@@ -35,6 +35,7 @@ interface Props {
 interface HintParts {
   prefix: string;
   time:   string;
+  suffix?: string;
 }
 
 function buildHintParts(
@@ -51,6 +52,7 @@ function buildHintParts(
 
   if (nextCheap) {
     const label  = nextCheap.coreLabel;
+    const priceSuffix = ` · ø ≈ ${(nextCheap.coreAvgCt + surchargeCt).toFixed(1).replace(".", ",")} ct`;
 
     if (status === "GREEN") {
       const dayPrefix = nextCheap.date === "tomorrow"
@@ -59,17 +61,20 @@ function buildHintParts(
       return {
         prefix: lang === "en" ? "Best: " : "Beste: ",
         time:   `${dayPrefix}${label}`,
+        suffix: priceSuffix,
       };
     }
     if (nextCheap.date === "today") {
       return {
         prefix: lang === "en" ? "Cheaper from " : "Günstiger ab ",
         time:   label,
+        suffix: priceSuffix,
       };
     }
     return {
       prefix: lang === "en" ? "Tomorrow: " : "Morgen: ",
       time:   label,
+      suffix: priceSuffix,
     };
   }
 
@@ -170,6 +175,7 @@ export default function HeroCard({ current, nextCheap, surchargeCt }: Props) {
             <Text style={[styles.hintTime, { color: accentColor }]}> 
               {(hintParts as HintParts).time}
             </Text>
+            {(hintParts as HintParts).suffix ?? ""}
           </Text>
         )}
       </View>

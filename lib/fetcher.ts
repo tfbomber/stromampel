@@ -76,18 +76,28 @@ export async function fetchAppData(): Promise<AppData> {
   const end   = start + 54 * 60 * 60 * 1000; // 54 h: today (24h) + tomorrow (24h) + buffer
   const url = `${AWATTAR_URL}?start=${start}&end=${end}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+  const TIMEOUT_MS = 10_000;
+  const MAX_RETRIES = 1;
 
-  let res: Response;
-  try {
-    res = await fetch(url, { signal: controller.signal });
-  } catch (e: any) {
-    clearTimeout(timeout);
-    throw new Error(`aWATTar fetch failed: ${e?.message ?? "timeout"}`);
+  let res: Response | null = null;
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!response.ok) throw new Error(`aWATTar API error: ${response.status}`);
+      res = response;
+      break;
+    } catch (e: any) {
+      clearTimeout(timeout);
+      lastErr = new Error(`aWATTar fetch failed (attempt ${attempt + 1}): ${e?.message ?? "timeout"}`);
+      console.warn(`[Fetcher] ${lastErr.message}`);
+      if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 2000));
+    }
   }
-  clearTimeout(timeout);
-  if (!res.ok) throw new Error(`aWATTar API error: ${res.status}`);
+  if (!res) throw lastErr!;
   const json = await res.json();
   const entries: AwattarEntry[] = json.data ?? [];
 

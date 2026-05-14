@@ -22,7 +22,7 @@ import type { Status } from "./types";
  * GREEN threshold = 0.88 aligned with CHEAP_THRESHOLD in windows.ts.
  */
 export function classifyPrice(priceCt: number, avgCt: number): Status {
-  const absAvg     = Math.abs(avgCt);
+  const absAvg     = Math.max(Math.abs(avgCt), 0.5); // floor 0.5 ct to prevent degenerate bands
   const greenCeil  = avgCt - absAvg * 0.12; // 12% cheaper than avg
   const yellowCeil = avgCt + absAvg * 0.10; // 10% more expensive than avg
   if (priceCt <= greenCeil)  return "GREEN";
