@@ -67,11 +67,20 @@ function formatNotifyTime(epochMs: number | null, lang: "de" | "en"): string | n
   const date = new Date(epochMs);
   const hh = date.getHours().toString().padStart(2, "0");
   const mm = date.getMinutes().toString().padStart(2, "0");
-  const isToday = new Date().toDateString() === date.toDateString();
-  const dayLabel = isToday
-    ? (lang === "en" ? "Today" : "Heute")
-    : (lang === "en" ? "Tomorrow" : "Morgen");
-  return `${dayLabel} ${hh}:${mm}`;
+  
+  const now = new Date();
+  const isToday = now.toDateString() === date.toDateString();
+  
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = tomorrow.toDateString() === date.toDateString();
+
+  if (isToday) return `${lang === "en" ? "Today" : "Heute"} ${hh}:${mm}`;
+  if (isTomorrow) return `${lang === "en" ? "Tomorrow" : "Morgen"} ${hh}:${mm}`;
+  
+  const dd = date.getDate().toString().padStart(2, "0");
+  const mo = (date.getMonth() + 1).toString().padStart(2, "0");
+  return `${dd}.${mo}. ${hh}:${mm}`;
 }
 
 function formatTimingChip(timingMin: number, lang: "de" | "en"): string {
@@ -100,6 +109,10 @@ function AppInner() {
   const langRef = useRef<"de" | "en">("de");
   // notifyActiveRef: keeps notifyActive accessible inside stale AppState closure
   const notifyActiveRef = useRef<boolean>(false);
+  // scheduleDebounceRef: coalesces concurrent load() calls on cold-start.
+  // Prevents the mount-load and the simultaneous AppState 'inactive→active'
+  // event from both scheduling notifications within the same JS tick.
+  const scheduleDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
   const makeOnChange = (barId: string) => (hour: number | null) =>
@@ -181,14 +194,21 @@ function AppInner() {
         } else {
           const futureFireAt = s.notifyMode === "once" && s.notifyFireAt && s.notifyFireAt > Date.now()
             ? s.notifyFireAt : undefined;
-          scheduleAllUpcomingNotifications(
-            d,
-            s.notifyMode ?? "daily_smart",
-            s.timing,
-            s.language ?? "de",
-            futureFireAt,
-            s.surchargeCt ?? 23,
-          ).catch(e => console.warn("[App] Notification scheduling failed:", e));
+          // Debounce: if two load() calls fire within 800 ms of each other
+          // (e.g. initial mount + AppState change on cold start), only the
+          // last one actually schedules — eliminating the duplicate notification.
+          if (scheduleDebounceRef.current) clearTimeout(scheduleDebounceRef.current);
+          scheduleDebounceRef.current = setTimeout(() => {
+            scheduleDebounceRef.current = null;
+            scheduleAllUpcomingNotifications(
+              d,
+              s.notifyMode ?? "daily_smart",
+              s.timing,
+              s.language ?? "de",
+              futureFireAt,
+              s.surchargeCt ?? 23,
+            ).catch(e => console.warn("[App] Notification scheduling failed:", e));
+          }, 800);
         }
       }
     } catch (e: any) {
@@ -421,8 +441,8 @@ function AppInner() {
           : (lang === "en" ? "Next reminder confirmed." : "Nächste Erinnerung bestätigt.")
         : notifyPreview?.fallbackOnly && fallbackFireLabel
           ? (lang === "en"
-              ? `No exact slot yet - backup at ${fallbackFireLabel}.`
-              : `Noch kein genauer Slot - Backup um ${fallbackFireLabel}.`)
+              ? `No exact slot yet - inactivity reminder on ${fallbackFireLabel}.`
+              : `Noch kein genauer Slot - Inaktivitäts-Erinnerung am ${fallbackFireLabel}.`)
           : notifyPreview?.noPreciseReason === "quiet_hours"
             ? (lang === "en" ? "Late-night reminders after 22:00 are skipped." : "Späte Erinnerungen nach 22:00 werden ausgelassen.")
             : (lang === "en" ? "Waiting for the next price-based reminder." : "Warte auf die nächste preisbasierte Erinnerung.");
