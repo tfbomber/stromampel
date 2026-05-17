@@ -446,13 +446,7 @@ function AppInner() {
           : notifyPreview?.noPreciseReason === "quiet_hours"
             ? (lang === "en" ? "Late-night reminders after 22:00 are skipped." : "Späte Erinnerungen nach 22:00 werden ausgelassen.")
             : (lang === "en" ? "Waiting for the next price-based reminder." : "Warte auf die nächste preisbasierte Erinnerung.");
-  const notifyMetaText = !settings?.notifyActive
-    ? null
-    : Platform.OS === "android"
-      ? (lang === "en"
-          ? "Android battery saver can still delay alerts. Use Test notification in Settings if needed."
-          : "Android-Akkusparen kann Erinnerungen weiter verzögern. Nutze bei Bedarf Test-Benachrichtigung in den Einstellungen.")
-      : null;
+
   const timelineBadge = timelineDay === "today"
     ? today?.nextCheapWindow
       ? `${t("cheapFrom")} ${today.nextCheapWindow.coreLabel}`
@@ -602,9 +596,7 @@ function AppInner() {
                         {notifyStatusText}
                       </Text>
                     )}
-                    {!!notifyMetaText && (
-                      <Text style={[styles.notifyMetaLine, { color: T.sub }]}>{notifyMetaText}</Text>
-                    )}
+
                   </View>
                   <Pressable onPress={() => setNotifyOpen(true)} hitSlop={8}>
                     <Text style={[styles.notifyEdit, { color: T.sub }]}>{t("notifyChange")}</Text>
